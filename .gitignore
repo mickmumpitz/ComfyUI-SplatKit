@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+skyseg.onnx
+# SphereSfM binary bundle -- auto-downloaded on first use, never committed.
+bin/
+# Test scratch output.
+tests/_e2e_out/
+tests/_colmap_out/
+# Local build artifacts / prebuilt wheels -- never committed to the pack.
+wheels/
+_input/

@@ -1,0 +1,26 @@
+# SplatKit runtime dependencies.
+#
+# The rasterizer is pure PyTorch (in-repo shim/) -- there are NO compiled deps,
+# no nvdiffrast and no pytorch3d. torch, numpy, scipy, Pillow, tqdm and
+# huggingface_hub (via transformers) already ship with ComfyUI, so the only
+# packages a clean ComfyUI install is missing are the few below.
+
+opencv-python      # cv2 -- panorama/perspective resampling, EXR I/O
+trimesh            # mesh build for the depth->mesh render
+scikit-image       # skimage -- used by the vendored utils_3dscene.nvrender
+click              # CLI decorators in the vendored MoGe infer_panorama
+matplotlib         # MoGe depth colorize (moge.utils.vis), imported at module load
+huggingface_hub    # MoGe checkpoint auto-download (Ruicheng/moge-vitl); usually present via transformers
+
+# pyrender is NOT required: it is referenced by two unused helpers in the vendored
+# pipeline_utils_3dscene and is auto-stubbed at import time. Install it only if you
+# extend the pack to use those OpenGL-render helpers.
+
+# OPTIONAL, not auto-installed: `triton` enables the GPU fast path of the
+# fly-through rasterizer (shim/raster_triton.py, ~1.5-2x faster renders).
+# Linux torch already bundles triton, nothing to do there. On Windows:
+#     python_embeded\python.exe -m pip install triton-windows
+# Entirely optional -- the shim self-tests triton on first use and silently
+# falls back to the pure-torch rasterizer if it is missing, broken, or the
+# GPU is unsupported. Deliberately NOT listed above: it is a large wheel and
+# an install failure on an exotic stack would block the required deps.

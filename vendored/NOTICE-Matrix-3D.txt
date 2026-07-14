@@ -1,0 +1,23 @@
+Matrix-3D
+
+Copyright (c) 2025  SkyworkAI and contributors
+
+This project includes code from the following open source projects:
+
+This software contains code derived from Diffusers (https://github.com/huggingface/diffusers), available under the Apache License 2.0.
+
+This software contains code derived from flux (https://github.com/black-forest-labs/flux), available under the Apache License 2.0.
+
+This software contains code derived from Wan2.1 (https://github.com/Wan-Video/Wan2.1), available under the Apache License 2.0.
+
+This software contains code derived from WorldGen (https://github.com/ZiYang-xie/WorldGen/), available under the Apache License 2.0.
+
+This software contains code derived from MoGe (https://github.com/microsoft/MoGe), available under the MIT License.
+
+This software contains code derived from nvdiffrast (https://github.com/NVlabs/nvdiffrast), available under the Nvidia Source Code License (1-Way Commercial).
+
+This software contains code derived from gaussian-splatting (https://github.com/graphdeco-inria/gaussian-splatting). Notice: gaussian-splatting is under Gaussian-Splatting License. Inria and the Max Planck Institut for Informatik (MPII) hold all the ownership rights on the Software named gaussian-splatting.
+
+This software contains code derived from StableSR (https://github.com/IceClear/StableSR). Notice: StableSR is under S-Lab License 1.0, Copyright 2022 S-Lab. 
+
+This software contains code derived from Venhancer (https://github.com/Vchitect/VEnhancer), whose license is not specified yet.
