@@ -13,10 +13,8 @@ Install it before importing the renderer:
     sys.modules["nvdiffrast.torch"] = nvdiffrast_shim
 
 Backends, chosen automatically (override with ``P2S_RASTER_BACKEND`` =
-``torch`` | ``triton`` | ``nvdiffrast`` | ``pytorch3d``):
+``torch`` | ``triton``):
 
-    * ``nvdiffrast`` -- if the real package is importable, delegate to it
-      (native speed for users who happen to have it built).
     * ``triton``     -- in-repo GPU fast path (``raster_triton``): the same
       contract as the torch backend, with the depth contest in a Triton
       kernel. JIT-compiled at runtime -- no wheels, no ABI lock. Picked when
@@ -25,9 +23,11 @@ Backends, chosen automatically (override with ``P2S_RASTER_BACKEND`` =
     * ``torch``      -- the pure-PyTorch fallback in ``raster_torch``; works on
       any machine that runs ComfyUI, no build required.
 
-PyTorch3D is recognised as an *available* fast path but, because its barycentric
-/ pixel conventions differ from nvdiffrast's, it is wrapped to emit nvdiffrast's
-exact ``rast`` layout (kept behind the same API; falls back to torch if absent).
+This shim deliberately does NOT delegate to a real nvdiffrast build, even if one
+happens to be importable in the environment. nvdiffrast is licensed for
+non-commercial use only, and silently routing renders through it on machines that
+happen to have it installed would hand this pack's users a license they never
+agreed to. The two in-repo backends above are the only code paths.
 """
 
 import os
@@ -54,31 +54,17 @@ def _triton_usable():
 
 
 def _select_backend():
+    """Triton GPU fast path if this machine can run it, else pure torch."""
     forced = os.environ.get("P2S_RASTER_BACKEND", "").strip().lower()
-    if forced in ("torch", "triton", "nvdiffrast", "pytorch3d"):
-        if forced == "nvdiffrast":
-            try:
-                import nvdiffrast.torch as _real  # noqa: F401
-                return "nvdiffrast"
-            except Exception:
-                return "torch"
-        if forced == "triton":
-            return "triton" if _triton_usable() else "torch"
-        return forced
-    # Auto: real nvdiffrast build > in-repo triton fast path > pure torch.
-    try:
-        import nvdiffrast.torch as _real  # noqa: F401
-        # Guard against importing *this* shim recursively.
-        if getattr(_real, "_P2S_SHIM", False):
-            raise ImportError
-        return "nvdiffrast"
-    except Exception:
-        pass
+    if forced == "torch":
+        return "torch"
+    if forced == "triton":
+        return "triton" if _triton_usable() else "torch"
     return "triton" if _triton_usable() else "torch"
 
 
 _BACKEND = _select_backend()
-_P2S_SHIM = True  # lets _select_backend detect self-import
+_P2S_SHIM = True  # marks this module as the shim, not a real nvdiffrast
 _TRITON_MOD = None
 
 
@@ -107,26 +93,19 @@ def _get_triton():
 class _Ctx:
     """Stand-in for RasterizeCudaContext / RasterizeGLContext.
 
-    The pure-torch backend is contextless; we only remember the device so the
-    API matches. Real-nvdiffrast backend stores the genuine context.
+    Both backends are contextless; we only remember the device so the API matches
+    what Matrix-3D's renderer expects to receive.
     """
 
-    def __init__(self, device=None, real=None):
+    def __init__(self, device=None):
         self.device = device
-        self.real = real
 
 
 def RasterizeCudaContext(device=None):
-    if _BACKEND == "nvdiffrast":
-        import nvdiffrast.torch as _real
-        return _Ctx(device, real=_real.RasterizeCudaContext(device=device))
     return _Ctx(device)
 
 
 def RasterizeGLContext(device=None, output_db=True, mode="automatic"):
-    if _BACKEND == "nvdiffrast":
-        import nvdiffrast.torch as _real
-        return _Ctx(device, real=_real.RasterizeGLContext(device=device))
     return _Ctx(device)
 
 
@@ -137,10 +116,6 @@ def rasterize(glctx, pos, tri, resolution, ranges=None, grad_db=True):
     backend -- it is only needed for differentiable texture filtering, which the
     Matrix-3D mesh-render path does not use. Returns None there.
     """
-    if _BACKEND == "nvdiffrast":
-        import nvdiffrast.torch as _real
-        return _real.rasterize(glctx.real, pos, tri, resolution,
-                               ranges=ranges, grad_db=grad_db)
     if _BACKEND == "triton":
         rt = _get_triton()
         if rt is not None:
@@ -151,10 +126,6 @@ def rasterize(glctx, pos, tri, resolution, ranges=None, grad_db=True):
 
 def interpolate(attr, rast, tri, rast_db=None, diff_attrs=None):
     """See nvdiffrast.torch.interpolate. Returns (out, out_da)."""
-    if _BACKEND == "nvdiffrast":
-        import nvdiffrast.torch as _real
-        return _real.interpolate(attr, rast, tri, rast_db=rast_db,
-                                 diff_attrs=diff_attrs)
     if _BACKEND == "triton":
         rt = _get_triton()
         if rt is not None:
@@ -167,20 +138,12 @@ def antialias(color, rast, pos, tri, topology_hash=None, pos_gradient_boost=1.0)
     """Pass-through. nvdiffrast antialias smooths silhouettes for gradient flow;
     the forward-only mesh-render path here does not consume that effect (the
     calls are commented out in Matrix-3D's renderer)."""
-    if _BACKEND == "nvdiffrast":
-        import nvdiffrast.torch as _real
-        return _real.antialias(color, rast, pos, tri, topology_hash=topology_hash,
-                               pos_gradient_boost=pos_gradient_boost)
     return color
 
 
 def texture(tex, uv, uv_da=None, filter_mode="auto", boundary_mode="wrap",
             max_mip_level=None):
     """Bilinear texture sampling (nvdiffrast-compatible minimal form)."""
-    if _BACKEND == "nvdiffrast":
-        import nvdiffrast.torch as _real
-        return _real.texture(tex, uv, uv_da=uv_da, filter_mode=filter_mode,
-                             boundary_mode=boundary_mode, max_mip_level=max_mip_level)
     return raster_torch_texture(tex, uv, boundary_mode)
 
 
@@ -199,7 +162,7 @@ def raster_torch_texture(tex, uv, boundary_mode="wrap"):
 
 
 def backend():
-    """Which backend is active: 'torch', 'triton' or 'nvdiffrast'."""
+    """Which backend is active: 'torch' or 'triton'."""
     return _BACKEND
 
 

@@ -154,8 +154,8 @@ implements nvdiffrast's exact `rasterize`/`interpolate` contract (perspective-co
 barycentrics, `1/w` depth buffer, near-plane clipping) and is injected into the import
 namespace so the vendored renderer is never edited.
 
-The backend is picked automatically per machine (override with
-`P2S_RASTER_BACKEND=torch|triton|nvdiffrast`):
+There are exactly two backends, picked automatically per machine (override with
+`P2S_RASTER_BACKEND=torch|triton`):
 
 1. **Triton** (`shim/raster_triton.py`) — in-repo GPU fast path, JIT-compiled at runtime
    against your own torch/CUDA, so there is nothing to build or download. Linux torch
@@ -165,10 +165,10 @@ The backend is picked automatically per machine (override with
 2. **pure torch** (`shim/raster_torch.py`) — zero dependencies, runs everywhere
    (CPU / AMD / Mac).
 
-The shim *will* delegate to a real nvdiffrast build if one happens to already be importable
-in your environment. It is never required and never installed — but if you care about the
-non-commercial license, set `P2S_RASTER_BACKEND=triton` (or `torch`) to make sure it
-can't be picked up.
+The shim will **not** delegate to a real nvdiffrast build, even if one happens to be
+importable in your environment. Silently routing renders through a non-commercially-licensed
+library because it's installed would hand you a license you never agreed to, so that path
+was removed. These two backends are the only code paths.
 
 **Validation** (`tests/`): vs a trimesh ray-cast oracle — coverage 100 %, colour MAE 0.0;
 triton vs torch (`compare_triton.py`) — matching masks, u/v/z bit-exact where the same
