@@ -970,8 +970,8 @@ class SphereSfMDataset:
     NO cameras.npz / Render Control needed -- SfM estimates everything. Trade-off vs the
     feed-forward paths: this needs genuine camera MOVEMENT/parallax in the clip (a static
     pan won't triangulate) and the scene must have texture, but the geometry is real SfM,
-    not a learned guess. REQUIRES the SphereSfM build (colmap_sphere.exe); set its path in
-    'colmap_sphere_exe' or the COLMAP_SPHERE_EXE env var.
+    not a learned guess. REQUIRES the SphereSfM build (colmap_sphere.exe), which is
+    auto-downloaded into the pack's bin/ on first run -- nothing to install by hand.
 
     MULTI-TRAJECTORY: wire extra WAN videos into pano_frames_2/3/4 (e.g. the
     bf_forward / bf_lateral / bf_vertical branches of the fusion workflow). All
@@ -1009,9 +1009,6 @@ class SphereSfMDataset:
                     "tooltip": "Optional third WAN pano video; concatenated in order."}),
                 "pano_frames_4": ("IMAGE", {
                     "tooltip": "Optional fourth WAN pano video; concatenated in order."}),
-                "colmap_sphere_exe": ("STRING", {"default": "",
-                    "tooltip": "Path to colmap_sphere.exe (SphereSfM build). Blank = "
-                               "COLMAP_SPHERE_EXE env var, else the 360Gaussian default."}),
                 "frame_stride": ("INT", {"default": 1, "min": 1, "max": 100, "step": 1,
                     "tooltip": "Use every Nth frame. SfM cost grows with frame count; "
                                "thin long clips but keep enough overlap for matching."}),
@@ -1082,7 +1079,6 @@ class SphereSfMDataset:
             initial_pano=None, pano_frames_1=None,
             pano_frames_2=None, pano_frames_3=None, pano_frames_4=None,
             pano_frames=None,           # back-compat alias for pano_frames_1 (renamed input)
-            colmap_sphere_exe="",
             frame_stride=1, max_frames=0, matcher_type="sequential", face_size=0,
             max_num_features=8192, peak_threshold=0.0066, edge_threshold=10.0,
             max_num_matches=32768, filter_max_reproj_error=4.0, filter_min_tri_angle=1.5,
@@ -1166,7 +1162,6 @@ class SphereSfMDataset:
                 "init_max_forward_motion": float(init_max_forward_motion),
                 "image_order": image_order,
                 "trajectory_lengths": trajectory_lengths,
-                "colmap_sphere_exe": colmap_sphere_exe,
             }
             pres = ss.write_panorama_dataset(frames, out_dir, sfm_params=sfm_params)
             print(f"[SphereSfMDataset] mode=panorama_only -> saved {pres['num_frames']} "
@@ -1194,7 +1189,7 @@ class SphereSfMDataset:
 
         work_dir = os.path.join(out_dir, "_spheresfm_work")
         res = ss.run_spheresfm(
-            frames, out_dir=out_dir, work_dir=work_dir, exe_path=colmap_sphere_exe,
+            frames, out_dir=out_dir, work_dir=work_dir,
             matcher_type=matcher_type, face_size=int(face_size),
             max_num_features=int(max_num_features), peak_threshold=float(peak_threshold),
             edge_threshold=float(edge_threshold), max_num_matches=int(max_num_matches),
@@ -1262,9 +1257,6 @@ class SphereSfMAddToDataset:
                 "pano_frames_2": ("IMAGE", {"tooltip": "Optional extra new trajectory; concatenated after pano_frames_1."}),
                 "pano_frames_3": ("IMAGE", {"tooltip": "Optional third new trajectory."}),
                 "pano_frames_4": ("IMAGE", {"tooltip": "Optional fourth new trajectory."}),
-                "colmap_sphere_exe": ("STRING", {"default": "",
-                    "tooltip": "Path to colmap_sphere.exe. Blank = COLMAP_SPHERE_EXE env var, "
-                               "else the auto-downloaded binary in bin/."}),
                 "frame_stride": ("INT", {"default": 1, "min": 1, "max": 100, "step": 1,
                     "tooltip": "Use every Nth new frame. Thin long clips but keep matching overlap."}),
                 "max_frames": ("INT", {"default": 0, "min": 0, "max": 1000, "step": 1,
@@ -1311,7 +1303,7 @@ class SphereSfMAddToDataset:
     def run(self, dataset_dir="",
             pano_frames_1=None, pano_frames_2=None, pano_frames_3=None, pano_frames_4=None,
             pano_frames=None,           # back-compat alias for pano_frames_1
-            colmap_sphere_exe="", frame_stride=1, max_frames=0, matcher_type="exhaustive",
+            frame_stride=1, max_frames=0, matcher_type="exhaustive",
             adjust_existing_cameras=False, retriangulate=True, face_size=0,
             max_num_features=8192, peak_threshold=0.0066, edge_threshold=10.0,
             max_num_matches=32768, abs_pose_min_num_inliers=30, image_order="camera_major"):
@@ -1353,7 +1345,7 @@ class SphereSfMAddToDataset:
                                "lower frame_stride / raise max_frames.")
 
         res = ss.add_to_spheresfm(
-            frames, dataset_dir=ds_dir, exe_path=colmap_sphere_exe,
+            frames, dataset_dir=ds_dir,
             matcher_type=matcher_type,
             adjust_existing_cameras=bool(adjust_existing_cameras),
             retriangulate=bool(retriangulate),

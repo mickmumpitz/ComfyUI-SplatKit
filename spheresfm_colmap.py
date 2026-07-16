@@ -134,7 +134,8 @@ _BUNDLE_URL = os.environ.get("COLMAP_SPHERE_BUNDLE_URL") or (
     "https://github.com/%s/releases/download/%s/%s" % (_BUNDLE_REPO, _BUNDLE_TAG, _BUNDLE_ASSET))
 
 # Optional escape hatch for an existing colmap_sphere.exe elsewhere on the machine
-# (e.g. a 360Gaussian install): set COLMAP_SPHERE_EXE, or type the path into the node.
+# (e.g. a 360Gaussian install): set COLMAP_SPHERE_EXE. Deliberately env-var-only -- the
+# nodes don't expose a path widget, so a stale path can't silently shadow the bundle.
 _DEFAULT_360G_BIN = os.environ.get("COLMAP_SPHERE_360G_BIN", "")
 
 
@@ -209,8 +210,7 @@ def find_colmap_sphere(explicit=""):
         "It should be fetched automatically from:\n  " + _BUNDLE_URL + "\n"
         "Check your internet connection, or download that zip manually and extract it into:\n  "
         + _BIN_DIR + "\n"
-        "Alternatively set the node's 'colmap_sphere_exe' input or the COLMAP_SPHERE_EXE "
-        "env var to a colmap_sphere.exe. See docs/panosplat-workflow/SPHERESFM.md for details.")
+        "See docs/SPHERESFM.md for details.")
 
 
 def _subprocess_env(exe_path):

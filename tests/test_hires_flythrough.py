@@ -39,6 +39,9 @@ def main():
     ap.add_argument("--height", type=int, default=1080)
     ap.add_argument("--mesh", type=int, default=2048)
     ap.add_argument("--scale", type=float, default=0.25)
+    ap.add_argument("--scale-mode", default="auto", choices=["auto", "absolute", "travel"])
+    ap.add_argument("--orientation", default="fixed_forward",
+                    choices=["fixed_forward", "look_forward", "look_at_point"])
     ap.add_argument("--directions", type=int, default=1)
     ap.add_argument("--spiral", type=float, default=0.0)
     ap.add_argument("--spiral-turns", type=float, default=1.0)
@@ -57,18 +60,22 @@ def main():
     total = args.frames * n_dir
     for mode in args.modes.split(","):
         t0 = time.perf_counter()
-        frames, mask, cam_json = node.render(
+        frames, mask, cam_json, splat = node.render(
             panorama=pano,
             anchors="0, 0, 0\n0.15, 0, 0.45\n0.35, 0.05, 0.9",
-            orientation="fixed_forward", length=args.frames,
+            orientation=args.orientation, length=args.frames,
             width=args.width, height=args.height, fov_deg=75.0,
-            edge_mode=mode, movement_scale=args.scale, scale_mode="auto",
+            edge_mode=mode, movement_scale=args.scale, scale_mode=args.scale_mode,
             mesh_width=str(args.mesh), output_name="_test_hires",
             directions=n_dir, spiral_radius=args.spiral, spiral_turns=args.spiral_turns)
         dt = time.perf_counter() - t0
         assert frames.shape == (total, args.height, args.width, 3), frames.shape
         assert mask.shape == frames.shape
+        assert splat.shape == frames.shape
         assert torch.isfinite(frames).all(), "non-finite pixels"
+        # splat_mask (real detail) can only ever be a subset of hole_mask (resolved):
+        # bg-layer regrowth and stretch-mode smears are resolved but NOT real detail.
+        assert bool((splat <= mask + 1e-6).all()), "splat_mask exceeds hole_mask"
 
         cams = json.load(open(cam_json))
         assert len(cams["w2c"]) == total and cams["directions"] == n_dir
@@ -93,6 +100,8 @@ def main():
                             cv2.cvtColor((f * 255).astype(np.uint8), cv2.COLOR_RGB2BGR))
         cv2.imwrite(os.path.join(args.out, f"{mode}_holes_f{args.frames - 1:03d}.png"),
                     ((1.0 - mask[args.frames - 1, ..., 0].numpy()) * 255).astype(np.uint8))
+        cv2.imwrite(os.path.join(args.out, f"{mode}_splatmask_f{args.frames - 1:03d}.png"),
+                    (splat[args.frames - 1, ..., 0].numpy() * 255).astype(np.uint8))
     print(f"wrote previews to {args.out}")
 
 

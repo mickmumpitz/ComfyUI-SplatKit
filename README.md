@@ -125,6 +125,17 @@ disocclusions rather than punching them out for WAN (`edge_mode`: `stretch` neve
 is the best starting point; `layered` re-grows the background behind silhouettes from real
 pano pixels and is sharpest; `fill`, `cut`).
 
+Camera controls: `directions` fans the same path around the pano; `spiral_radius` orbits
+the camera around its line of sight to sweep parallax (radius is a fraction of the median
+scene depth, applied *after* path scaling, so travel and orbit size are independent);
+`orientation=look_at_point` keeps the camera aimed at a fixed spot straight ahead
+(auto-picked per direction from the depth map), which turns the spiral into an orbit
+*around* that spot; `scale_mode=travel` makes `movement_scale` the literal answer to "how
+far does the camera get from the origin", as a fraction of the median scene depth.
+
+The node also emits a **`splat_mask`** (white = real pano detail, black =
+stretched/synthesized pixels — rubber-sheet smears, re-grown background, push-pull fills).
+
 **Add HiRes Views to Dataset** registers those renders into an existing dataset. No pose
 transfer and no scale fitting: COLMAP holds a **mixed model** — the WAN panoramas stay
 `SPHERE` cameras, the renders enter as their own `PINHOLE` camera in the *same*
@@ -133,6 +144,13 @@ pinned, so the add cannot disturb a dataset that already trains. Measured on a 3
 dataset: 24/24 views registered at ~0.8 px, **0** existing poses moved, points3D
 24 530 → 25 926, ~50 s. (Needs a dataset built with `mode=colmap_now`, which keeps
 `_spheresfm_work/`.)
+
+Wire `splat_mask` into the add node and per-view masks land in `<dataset>/masks/`
+(white = train, black = ignore; the cube faces get all-white masks so coverage is
+complete). Trainers pick them up as follows: **nerfstudio/splatfacto** — add
+`--masks-path masks` to the COLMAP dataparser; **Brush** — auto-detects a `masks/` folder
+next to `images/`; **Postshot** — import as Image Masks, mode *Remove Occluders*.
+Trainers without mask support ignore the folder.
 
 ## Training the dataset
 

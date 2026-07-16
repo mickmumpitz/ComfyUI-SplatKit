@@ -72,9 +72,12 @@ def add_hires_views(frames, cam_meta, dataset_dir, exe_path="",
                     retriangulate=True, adjust_existing_cameras=False,
                     max_num_features=8192, peak_threshold=0.0066,
                     edge_threshold=10.0, first_octave=0, max_num_matches=32768,
-                    abs_pose_min_num_inliers=30, face_size=0, match_stride=1):
+                    abs_pose_min_num_inliers=30, face_size=0, match_stride=1,
+                    masks=None):
     """frames: (N,H,W,3) RGB uint8 hires renders. cam_meta: the HiRes node's cameras_json
-    (parsed) -- only its K/width/height/length/directions are used.
+    (parsed) -- only its K/width/height/length/directions are used. masks: optional
+    (N,H,W) uint8 per-view training masks (255 = train on this pixel, 0 = ignore),
+    written as sidecar PNGs under ``dataset_dir/masks/``.
 
     Returns a dict with the merged dataset's counts (see the bottom of this function).
     """
@@ -249,6 +252,36 @@ def add_hires_views(frames, cam_meta, dataset_dir, exe_path="",
         if nm in hires_names:                       # only the ones that actually registered
             shutil.copy2(os.path.join(equ, nm), os.path.join(image_dir, nm))
 
+    # Optional training masks: sidecar single-channel PNGs in masks/, one per image,
+    # named exactly like the image (nerfstudio's ColmapDataParser convention -- train
+    # with `--masks-path masks`; Brush auto-detects a masks/ folder next to images/).
+    # White (255) = train on this pixel, black (0) = ignore. nerfstudio insists every
+    # image has a mask once any does, so the cube faces get all-white ones.
+    masks_written = 0
+    if masks is not None:
+        mask_dir = os.path.join(dataset_dir, "masks")
+        os.makedirs(mask_dir, exist_ok=True)
+        for i, nm in enumerate(names):
+            if nm in hires_names:
+                cv2.imwrite(os.path.join(mask_dir, nm), masks[i])
+                masks_written += 1
+        white = None
+        for p in glob.glob(os.path.join(image_dir, "*.png")):
+            nm = os.path.basename(p)
+            mask_path = os.path.join(mask_dir, nm)
+            if os.path.isfile(mask_path):
+                continue
+            im = cv2.imread(p, cv2.IMREAD_GRAYSCALE)
+            if im is None:
+                continue
+            if white is None or white.shape != im.shape:
+                white = np.full(im.shape, 255, np.uint8)
+            cv2.imwrite(mask_path, white)
+            masks_written += 1
+        print("[HiRes/add] wrote %d masks to masks/ (white = train, black = ignore; "
+              "nerfstudio: --masks-path masks, Brush: auto-detected)"
+              % masks_written, flush=True)
+
     cub_sparse = os.path.join(cubic, "sparse")
     cams = crm.read_cameras_binary(os.path.join(cub_sparse, "cameras.bin"))
     imgs = crm.read_images_binary(os.path.join(cub_sparse, "images.bin"))
@@ -311,7 +344,7 @@ def add_hires_views(frames, cam_meta, dataset_dir, exe_path="",
             "num_faces": int(total_faces), "num_hires": int(added),
             "num_images": int(total_faces + added), "num_points": int(num_points),
             "num_registered": int(len(registered)), "num_offered": int(len(names)),
-            "faces_refreshed": int(moved)}
+            "faces_refreshed": int(moved), "num_masks": int(masks_written)}
 
 
 class AddHiResViewsToDataset:
@@ -345,8 +378,11 @@ class AddHiResViewsToDataset:
                                "intrinsics (K) so the views register with true, not "
                                "estimated, focal length."}),
                 "dataset_dir": ("STRING", {"default": "",
-                    "tooltip": "A SphereSfM dataset root (the folder holding images/, "
-                               "sparse/ and _spheresfm_work/). Must have been built with "
+                    "tooltip": "The EXISTING SphereSfM dataset to add to -- wire the Dataset "
+                               "Project node's dataset_dir here (the same value the base "
+                               "SphereSfM node used as output_name), or type the dataset "
+                               "folder name/path. It is the folder holding images/, sparse/ "
+                               "and _spheresfm_work/, and must have been built with "
                                "mode=colmap_now -- the add needs the original spherical "
                                "reconstruction to register against."}),
             },
@@ -370,8 +406,13 @@ class AddHiResViewsToDataset:
                 "abs_pose_min_num_inliers": ("INT", {"default": 30, "min": 10, "max": 300,
                     "tooltip": "Inliers needed to accept a view's pose. Lower = more views "
                                "register, at the risk of a bad pose sneaking in."}),
-                "colmap_sphere_exe": ("STRING", {"default": "",
-                    "tooltip": "Optional explicit path to colmap_sphere.exe."}),
+                "splat_mask": ("IMAGE", {"tooltip":
+                    "The HiRes node's 'splat_mask' output (white = real pano detail, "
+                    "black = synthesized/stretched). When wired, per-view masks land in "
+                    "<dataset>/masks/ so splat trainers can exclude the fake pixels from "
+                    "the loss: nerfstudio trains with '--masks-path masks', Brush picks "
+                    "the folder up automatically. The cube faces get all-white masks so "
+                    "every image has one (nerfstudio requires all-or-none)."}),
             },
         }
 
@@ -383,10 +424,15 @@ class AddHiResViewsToDataset:
 
     def add(self, frames, cameras_json, dataset_dir, retriangulate=True,
             adjust_existing_cameras=False, match_stride=1, max_num_features=8192,
-            abs_pose_min_num_inliers=30, colmap_sphere_exe=""):
+            abs_pose_min_num_inliers=30, splat_mask=None):
         if not dataset_dir:
-            raise RuntimeError("[HiRes/add] dataset_dir is empty -- point it at a SphereSfM "
-                               "dataset root (built with mode=colmap_now).")
+            raise RuntimeError("[HiRes/add] dataset_dir is empty -- wire the Dataset Project "
+                               "node in, or point it at a SphereSfM dataset root (built with "
+                               "mode=colmap_now).")
+        # Same name-or-path resolution as the SphereSfM add node, so a bare dataset name
+        # resolves under ComfyUI/output instead of against the process CWD.
+        from .nodes import _resolve_existing_dataset
+        dataset_dir = _resolve_existing_dataset(dataset_dir)
         with open(cameras_json, "r", encoding="utf-8") as f:
             meta = json.load(f)
 
@@ -402,21 +448,38 @@ class AddHiResViewsToDataset:
             K[1, :] *= sy
             meta["K"] = K.tolist()
 
+        masks_u8 = None
+        if splat_mask is not None:
+            import cv2
+            if splat_mask.shape[0] != arr.shape[0]:
+                raise RuntimeError(
+                    "[HiRes/add] splat_mask batch (%d) does not match frames (%d) -- wire "
+                    "the SAME HiRes run's outputs." % (splat_mask.shape[0], arr.shape[0]))
+            m = splat_mask[..., 0].cpu().numpy()                       # [N,H,W] 0..1
+            masks_u8 = np.where(m >= 0.5, 255, 0).astype(np.uint8)
+            if masks_u8.shape[1:3] != arr.shape[1:3]:
+                masks_u8 = np.stack([cv2.resize(mm, (arr.shape[2], arr.shape[1]),
+                                                interpolation=cv2.INTER_NEAREST)
+                                     for mm in masks_u8])
+
         res = add_hires_views(
-            arr, meta, dataset_dir, exe_path=colmap_sphere_exe,
+            arr, meta, dataset_dir,
             retriangulate=bool(retriangulate),
             adjust_existing_cameras=bool(adjust_existing_cameras),
             max_num_features=int(max_num_features),
             abs_pose_min_num_inliers=int(abs_pose_min_num_inliers),
-            match_stride=int(match_stride))
+            match_stride=int(match_stride), masks=masks_u8)
 
-        report = ("registered %d/%d hires views into %s\n"
-                  "  images : %d cube faces + %d hires = %d\n"
-                  "  points : %d\n"
-                  "Train it exactly as before (same images/ + sparse/0 layout)."
+        mask_note = ("  masks  : %d in masks/ (nerfstudio: --masks-path masks; Brush: "
+                     "automatic)\n" % res["num_masks"]) if res.get("num_masks") else ""
+        report = (("registered %d/%d hires views into %s\n"
+                   "  images : %d cube faces + %d hires = %d\n"
+                   "  points : %d\n")
                   % (res["num_registered"], res["num_offered"], res["model_dir"],
                      res["num_faces"], res["num_hires"], res["num_images"],
-                     res["num_points"]))
+                     res["num_points"])
+                  + mask_note
+                  + "Train it exactly as before (same images/ + sparse/0 layout).")
         print("[HiRes/add]\n" + report, flush=True)
         return (res["model_dir"], report, res["num_registered"], res["num_points"])
 

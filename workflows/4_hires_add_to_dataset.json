@@ -1,8 +1,8 @@
 {
   "id": "p2s-hires-add-01",
   "revision": 0,
-  "last_node_id": 6,
-  "last_link_id": 4,
+  "last_node_id": 7,
+  "last_link_id": 6,
   "nodes": [
     {
       "id": 1,
@@ -22,7 +22,7 @@
       "outputs": [],
       "properties": {},
       "widgets_values": [
-        "FINAL / 4 - ADD HIGH-RES VIEWS TO AN EXISTING SPLAT DATASET\n\nTakes the SAME panorama your dataset was built from, renders full-resolution pinhole views of it, and registers them INTO that dataset's existing SphereSfM reconstruction. The COLMAP camera information is regenerated over the combination of both -- the WAN fly-through frames AND the hires renders -- in one sparse model.\n\nWHY THIS IS WORTH DOING: the cube faces SphereSfM produces are 360x360. That is the ceiling on how sharp your splat can get, no matter how you train it. These hires views go in at 1920x1080 (or 4K) of real panorama detail, from the same scene, with real SfM-solved poses.\n\nHOW IT WORKS (no pose transfer, no scale fitting, no trust required):\nCOLMAP holds a MIXED model. The WAN panoramas stay SPHERE cameras; the hires renders enter as their own PINHOLE camera, matched against the existing frames by real image features, and bundle-adjusted in the SAME reconstruction. Their poses come out of the same solve as everything else. The existing cameras are FIXED during registration (adjust_existing_cameras=false), so the add is purely additive: it cannot move poses that already train well. Verified on 040_CafeLounge: 24/24 views registered, ~0.8px residuals, 0 existing poses moved, points3D 24530 -> 25926.\n\nREQUIREMENTS:\n  * dataset_dir = a SphereSfM dataset root (holds images/, sparse/, _spheresfm_work/). It MUST have been built with mode=colmap_now -- the add registers against the original spherical reconstruction, which panorama_only datasets do not have.\n  * The panorama here MUST be the one the dataset was built from. SfM matches the renders against the existing frames by image content; views of another scene simply fail to register (the node says so rather than writing garbage).\n  * Keep movement_scale modest and edge_mode=stretch. Registration matches REAL detail -- pixels invented by a hole fill match nothing.\n\nAFTER IT RUNS: train exactly as before, same command, same folder. The hires views are just extra images in images/ with poses in sparse/0.\n  LichtFeld-Studio.exe -d <dataset_dir> -o <out> --headless --train --strategy mcmc --max-cap 2000000 --sh-degree 2"
+        "FINAL / 4 - ADD HIGH-RES VIEWS TO AN EXISTING SPLAT DATASET\n\nTakes the SAME panorama your dataset was built from, renders full-resolution pinhole views of it, and registers them INTO that dataset's existing SphereSfM reconstruction. The COLMAP camera information is regenerated over the combination of both -- the WAN fly-through frames AND the hires renders -- in one sparse model.\n\nWHY THIS IS WORTH DOING: the cube faces SphereSfM produces are 360x360. That is the ceiling on how sharp your splat can get, no matter how you train it. These hires views go in at 1920x1080 (or 4K) of real panorama detail, from the same scene, with real SfM-solved poses.\n\nHOW IT WORKS (no pose transfer, no scale fitting, no trust required):\nCOLMAP holds a MIXED model. The WAN panoramas stay SPHERE cameras; the hires renders enter as their own PINHOLE camera, matched against the existing frames by real image features, and bundle-adjusted in the SAME reconstruction. Their poses come out of the same solve as everything else. The existing cameras are FIXED during registration (adjust_existing_cameras=false), so the add is purely additive: it cannot move poses that already train well. Verified on 040_CafeLounge: 24/24 views registered, ~0.8px residuals, 0 existing poses moved, points3D 24530 -> 25926.\n\nWHERE THE PATH GOES: the 'Dataset Project' node (top right) is the single source of truth, exactly like workflows 1/1b -- set dataset_name there to the dataset you want to grow (the same name the base SphereSfM node used as output_name) and it feeds the add node's dataset_dir. Do not type the path on the add node itself.\n\nPLAYBACK: the hires views go out through a VHS Video Combine with save_output=OFF -- it plays the batch back as one video instead of decoding N full-res stills into the browser (a PreviewImage on 294 x 1920x1080 frames will crawl). The frames themselves are still written to the dataset by the add node; the video is preview only.\n\nREQUIREMENTS:\n  * dataset_dir = a SphereSfM dataset root (holds images/, sparse/, _spheresfm_work/). It MUST have been built with mode=colmap_now -- the add registers against the original spherical reconstruction, which panorama_only datasets do not have.\n  * The panorama here MUST be the one the dataset was built from. SfM matches the renders against the existing frames by image content; views of another scene simply fail to register (the node says so rather than writing garbage).\n  * Keep movement_scale modest and edge_mode=stretch. Registration matches REAL detail -- pixels invented by a hole fill match nothing.\n\nMASKS: the splat_mask output (wired in below) marks which pixels are REAL pano detail (white) vs stretched/synthesized (black). The add node writes them to <dataset>/masks/ so a trainer can exclude the fake pixels from the loss: nerfstudio/splatfacto trains with '--masks-path masks', Brush auto-detects the folder, Postshot imports them as Image Masks (mode: Remove Occluders). Trainers without mask support just ignore the folder -- harmless either way.\n\nAFTER IT RUNS: train exactly as before, same command, same folder. The hires views are just extra images in images/ with poses in sparse/0.\n  LichtFeld-Studio.exe -d <dataset_dir> -o <out> --headless --train --strategy mcmc --max-cap 2000000 --sh-degree 2"
       ]
     },
     {
@@ -121,6 +121,15 @@
           "links": [
             3
           ]
+        },
+        {
+          "localized_name": "splat_mask",
+          "name": "splat_mask",
+          "type": "IMAGE",
+          "slot_index": 3,
+          "links": [
+            5
+          ]
         }
       ],
       "properties": {
@@ -178,6 +187,22 @@
             "name": "cameras_json"
           },
           "link": 3
+        },
+        {
+          "localized_name": "dataset_dir",
+          "name": "dataset_dir",
+          "type": "STRING",
+          "widget": {
+            "name": "dataset_dir"
+          },
+          "link": 6
+        },
+        {
+          "localized_name": "splat_mask",
+          "name": "splat_mask",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": 5
         }
       ],
       "outputs": [
@@ -220,37 +245,8 @@
         false,
         1,
         8192,
-        30,
-        ""
+        30
       ]
-    },
-    {
-      "id": 5,
-      "type": "PreviewImage",
-      "pos": [
-        880,
-        260
-      ],
-      "size": [
-        460,
-        320
-      ],
-      "flags": {},
-      "order": 4,
-      "mode": 0,
-      "inputs": [
-        {
-          "localized_name": "images",
-          "name": "images",
-          "type": "IMAGE",
-          "link": 4
-        }
-      ],
-      "outputs": [],
-      "properties": {
-        "Node name for S&R": "PreviewImage"
-      },
-      "widgets_values": []
     },
     {
       "id": 6,
@@ -272,6 +268,245 @@
       "widgets_values": [
         "THE ADD IS DESTRUCTIVE to the dataset folder (it rewrites sparse/0 and drops new images into images/). It is designed to be safe -- existing poses are pinned and existing faces are left alone -- but if you want to keep a pristine copy, copy the dataset folder first.\n\nRunning it TWICE just adds more views (hires_ numbering continues); it does not duplicate.\n\nIf views fail to register, the node tells you instead of writing a broken dataset. Fixes, in order:\n  1. lower movement_scale (renders stay closer to what the pano really shows)\n  2. edge_mode=stretch (no invented pixels)\n  3. raise max_num_features\n  4. lower abs_pose_min_num_inliers\n\nmatch_stride: raise to 2-3 if your base dataset has many hundreds of frames and matching is slow. Neighbouring pano frames are near-duplicates, so every 2nd still ties the views in."
       ]
+    },
+    {
+      "id": 7,
+      "type": "SplatKit_DatasetProject",
+      "pos": [
+        880,
+        -300
+      ],
+      "size": [
+        460,
+        82
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "dataset_name",
+          "name": "dataset_name",
+          "type": "STRING",
+          "widget": {
+            "name": "dataset_name"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "reset",
+          "name": "reset",
+          "shape": 7,
+          "type": "BOOLEAN",
+          "widget": {
+            "name": "reset"
+          },
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "dataset_dir",
+          "name": "dataset_dir",
+          "type": "STRING",
+          "slot_index": 0,
+          "links": [
+            6
+          ]
+        },
+        {
+          "localized_name": "control_rgb_prefix",
+          "name": "control_rgb_prefix",
+          "type": "STRING",
+          "slot_index": 1,
+          "links": null
+        },
+        {
+          "localized_name": "control_mask_prefix",
+          "name": "control_mask_prefix",
+          "type": "STRING",
+          "slot_index": 2,
+          "links": null
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "SplatKit_DatasetProject"
+      },
+      "widgets_values": [
+        "camplot_spheresfm_dataset",
+        false
+      ]
+    },
+    {
+      "id": 5,
+      "type": "VHS_VideoCombine",
+      "pos": [
+        880,
+        260
+      ],
+      "size": [
+        460,
+        400
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "images",
+          "name": "images",
+          "type": "IMAGE",
+          "link": 4
+        },
+        {
+          "localized_name": "audio",
+          "name": "audio",
+          "shape": 7,
+          "type": "AUDIO",
+          "link": null
+        },
+        {
+          "localized_name": "meta_batch",
+          "name": "meta_batch",
+          "shape": 7,
+          "type": "VHS_BatchManager",
+          "link": null
+        },
+        {
+          "localized_name": "vae",
+          "name": "vae",
+          "shape": 7,
+          "type": "VAE",
+          "link": null
+        },
+        {
+          "localized_name": "frame_rate",
+          "name": "frame_rate",
+          "type": "FLOAT",
+          "widget": {
+            "name": "frame_rate"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "loop_count",
+          "name": "loop_count",
+          "type": "INT",
+          "widget": {
+            "name": "loop_count"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "filename_prefix",
+          "name": "filename_prefix",
+          "type": "STRING",
+          "widget": {
+            "name": "filename_prefix"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "format",
+          "name": "format",
+          "type": "COMBO",
+          "widget": {
+            "name": "format"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "pingpong",
+          "name": "pingpong",
+          "type": "BOOLEAN",
+          "widget": {
+            "name": "pingpong"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "save_output",
+          "name": "save_output",
+          "type": "BOOLEAN",
+          "widget": {
+            "name": "save_output"
+          },
+          "link": null
+        },
+        {
+          "name": "pix_fmt",
+          "type": [
+            "yuv420p",
+            "yuv420p10le"
+          ],
+          "widget": {
+            "name": "pix_fmt"
+          },
+          "link": null
+        },
+        {
+          "name": "crf",
+          "type": "INT",
+          "widget": {
+            "name": "crf"
+          },
+          "link": null
+        },
+        {
+          "name": "save_metadata",
+          "type": "BOOLEAN",
+          "widget": {
+            "name": "save_metadata"
+          },
+          "link": null
+        },
+        {
+          "name": "trim_to_audio",
+          "type": "BOOLEAN",
+          "widget": {
+            "name": "trim_to_audio"
+          },
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "Filenames",
+          "name": "Filenames",
+          "type": "VHS_FILENAMES",
+          "links": null
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfyui-videohelpersuite",
+        "ver": "4ee72c065db22c9d96c2427954dc69e7b908444b",
+        "Node name for S&R": "VHS_VideoCombine"
+      },
+      "widgets_values": {
+        "frame_rate": 24,
+        "loop_count": 0,
+        "filename_prefix": "hires_views/preview",
+        "format": "video/h264-mp4",
+        "pix_fmt": "yuv420p",
+        "crf": 19,
+        "save_metadata": true,
+        "trim_to_audio": false,
+        "pingpong": false,
+        "save_output": false,
+        "videopreview": {
+          "hidden": false,
+          "paused": false,
+          "params": {
+            "filename": "",
+            "subfolder": "",
+            "type": "temp",
+            "format": "video/h264-mp4",
+            "frame_rate": 24,
+            "workflow": "",
+            "fullpath": ""
+          }
+        }
+      }
     }
   ],
   "links": [
@@ -306,6 +541,22 @@
       5,
       0,
       "IMAGE"
+    ],
+    [
+      5,
+      3,
+      3,
+      4,
+      3,
+      "IMAGE"
+    ],
+    [
+      6,
+      7,
+      0,
+      4,
+      2,
+      "STRING"
     ]
   ],
   "groups": [
@@ -327,9 +578,9 @@
       "title": "Register them into the existing dataset",
       "bounding": [
         860,
-        -110,
+        -370,
         500,
-        700
+        1060
       ],
       "color": "#8A8",
       "font_size": 24,

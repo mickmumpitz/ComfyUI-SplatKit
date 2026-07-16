@@ -178,6 +178,31 @@ def _background_layer(depth, dirs, rtol, extend):
     return d, td
 
 
+def _depth_toward(depth, world_dirs):
+    """Scene depth seen from the pano origin along world-frame directions. [N].
+
+    Nearest-pixel fetch from the equirect depth grid, same convention as
+    nvrender.intersection_check but reusing this module's own pano<->world mapping.
+    """
+    rot = _PANO_TO_WORLD.to(world_dirs.device)
+    uv = _dirs_to_uv(F.normalize(world_dirs, dim=-1) @ rot)   # world -> pano frame
+    h, w = depth.shape
+    x = (uv[..., 0] * w).long().clamp(0, w - 1)
+    y = (uv[..., 1] * h).long().clamp(0, h - 1)
+    return depth[y, x]
+
+
+def _travel_scale(rail, dist):
+    """Uniformly scale a w2c rail so its farthest frame sits exactly ``dist`` from
+    the origin. Frame 0 has zero translation and stays zero, so the path always
+    departs FROM the pano origin -- ``dist`` is simply how far it gets."""
+    c2w = torch.linalg.inv(rail)
+    m = float(c2w[:, :3, 3].norm(dim=-1).max())
+    if m > 1e-12:
+        c2w[:, :3, 3] *= dist / m
+    return torch.linalg.inv(c2w)
+
+
 def _yaw4(deg):
     """4x4 rotation about the world vertical axis (+Y; the render frame is +Y down)."""
     a = math.radians(deg)
@@ -270,7 +295,11 @@ class HiResPanoFlythrough:
         output is one batch of directions x length frames.
       * ``spiral_radius`` orbits the camera up-left-down-right around its line of sight
         as it flies, WITHOUT turning it -- the aim stays wherever ``orientation`` put it,
-        so the spiral only sweeps parallax across the frame.
+        so the spiral only sweeps parallax across the frame. The radius is a fraction
+        of the median scene depth, applied after path scaling, so travel and orbit
+        size are independent controls. With ``orientation=look_at_point`` the camera
+        instead stays aimed at a fixed spot straight ahead (auto-picked per direction
+        from the depth map), turning the spiral into an orbit around that spot.
     """
 
     @classmethod
@@ -285,10 +314,14 @@ class HiResPanoFlythrough:
                                "camera. One 'x,y,z' per line or JSON [[x,y,z],...]. Keep the "
                                "moves SMALL here -- this node closes disocclusions from a "
                                "single pano, it cannot invent a whole new viewpoint."}),
-                "orientation": (["look_forward", "fixed_forward"], {"default": "fixed_forward",
+                "orientation": (["look_forward", "fixed_forward", "look_at_point"],
+                    {"default": "fixed_forward",
                     "tooltip": "fixed_forward = camera keeps the pano's forward heading (pure "
                                "dolly; least tearing). look_forward = camera turns to face the "
-                               "path tangent."}),
+                               "path tangent. look_at_point = camera stays AIMED at a fixed "
+                               "anchor point picked automatically per direction (where that "
+                               "direction's forward ray hits the scene) -- with a spiral this "
+                               "turns the orbit into an arc AROUND the spot, like a crane shot."}),
                 "length": ("INT", {"default": 49, "min": 1, "max": 257,
                     "tooltip": "Frames along the path. 1 = a single still at the first anchor."}),
                 "width": ("INT", {"default": 1920, "min": 256, "max": 8192, "step": 16,
@@ -306,12 +339,19 @@ class HiResPanoFlythrough:
                 "movement_scale": ("FLOAT", {"default": 0.15, "min": 0.01, "max": 3.0, "step": 0.01,
                     "tooltip": "Travel gain. scale_mode=auto: the path's most extreme frame "
                                "reaches this fraction of the scene depth. absolute: 1 anchor "
-                               "unit = this x median scene depth. Small values (0.05-0.3) keep "
-                               "disocclusions small enough to close convincingly."}),
-                "scale_mode": (["auto", "absolute"], {"default": "auto",
+                               "unit = this x median scene depth. travel: the farthest frame "
+                               "sits exactly this fraction of the MEDIAN scene depth from the "
+                               "origin. Small values (0.05-0.3) keep disocclusions small enough "
+                               "to close convincingly."}),
+                "scale_mode": (["auto", "absolute", "travel"], {"default": "auto",
                     "tooltip": "auto = renormalise the whole path against the scene depth "
                                "(collision guard, anchor magnitude ignored). absolute = anchor "
-                               "coords taken literally in units of median scene depth."}),
+                               "coords taken literally in units of median scene depth. travel = "
+                               "origin-anchored: movement_scale directly sets how far the path's "
+                               "farthest frame gets from the pano origin, as a fraction of the "
+                               "median scene depth -- predictable travel, same for every "
+                               "direction. No collision guard (a warning prints if the path "
+                               "would cross geometry)."}),
             },
             "optional": {
                 "mesh_width": (["1024", "2048", "4096"], {"default": "2048",
@@ -343,10 +383,12 @@ class HiResPanoFlythrough:
                                "direction still clears it in the others. 1 = single direction."}),
                 "spiral_radius": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01,
                     "tooltip": "Optional spiral: the camera orbits up-left-down-right around its "
-                               "line of sight while it flies the path, WITHOUT turning -- it keeps "
-                               "pointing where 'orientation' aims it. 0 = off. Units are anchor "
-                               "units (same scaling as the path), so 0.05-0.2 is a usable orbit. "
-                               "Sweeps parallax across the frame -- good for splat/SfM coverage."}),
+                               "line of sight while it flies the path (with look_at_point it "
+                               "orbits the anchor spot instead). 0 = off. Units are fractions of "
+                               "the MEDIAN scene depth, applied AFTER path scaling -- the orbit "
+                               "size no longer rides on movement_scale, so raising the travel "
+                               "does not widen the spiral. 0.02-0.1 is a usable orbit. Sweeps "
+                               "parallax across the frame -- good for splat/SfM coverage."}),
                 "spiral_turns": ("FLOAT", {"default": 1.0, "min": 0.1, "max": 8.0, "step": 0.1,
                     "tooltip": "Full circles the spiral completes over the path's length."}),
                 "spiral_phase_deg": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 360.0, "step": 5.0,
@@ -355,8 +397,11 @@ class HiResPanoFlythrough:
             },
         }
 
-    RETURN_TYPES = ("IMAGE", "IMAGE", "STRING")
-    RETURN_NAMES = ("frames", "hole_mask", "cameras_json")
+    # splat_mask is appended LAST so saved workflows keep their output indices.
+    # 1 = real, unstretched pano detail; 0 = synthesized (bg-layer regrowth, push-pull
+    # fill, rubber-sheet stretch) or hole -- the pixels to exclude from splat training.
+    RETURN_TYPES = ("IMAGE", "IMAGE", "STRING", "IMAGE")
+    RETURN_NAMES = ("frames", "hole_mask", "cameras_json", "splat_mask")
     FUNCTION = "render"
     CATEGORY = "SplatKit"
 
@@ -392,6 +437,8 @@ class HiResPanoFlythrough:
         # Sky / invalid: push far away, exactly as render_control does, so the mesh
         # closes into a dome instead of exploding at the horizon.
         valid_max = float(depth_np[valid_np].max()) if valid_np.any() else 1.0
+        # Typical scene distance; the world-unit reference for travel mode and the spiral.
+        d_ref = float(np.median(depth_np[valid_np])) if valid_np.any() else 1.0
         depth_np = depth_np.copy()
         depth_np[~valid_np] = 2.0 * valid_max
 
@@ -404,9 +451,9 @@ class HiResPanoFlythrough:
         verts = (depth[..., None] * dirs).reshape(-1, 3) @ rot.T          # [V,3] world (= start cam)
         faces = _grid_faces(mh, mw, dev)
         edge = _depth_edges(depth, float(edge_rtol))
+        # Always carry the REAL edge alpha: stretch mode ignores it for hole-punching
+        # (that is its point) but the splat_mask still needs to know what stretched.
         alpha = (~edge).float().reshape(-1, 1)                            # 0 on stretched triangles
-        if edge_mode == "stretch":
-            alpha = torch.ones_like(alpha)
         attr = torch.cat([dirs.reshape(-1, 3), alpha], dim=1)             # [V,4] texdir + alpha
 
         # --- camera rail (Camera Plot frame + scaling, so paths transfer) ---------
@@ -417,11 +464,10 @@ class HiResPanoFlythrough:
         pts_r = pts.copy()
         pts_r[:, 1] *= -1.0                                               # editor +Y up -> world +Y down
         positions = _camplot_catmull_rom(pts_r, length) if length > 1 else pts_r[:1]
-        c2w = _camplot_c2w_stack(positions, orientation, None)
-        if float(spiral_radius) > 0.0:
-            # Position-only: c2w's rotation (the aim) is deliberately not touched.
-            c2w[:, :3, 3] = positions + _spiral_offsets(
-                c2w, float(spiral_radius), float(spiral_turns), float(spiral_phase_deg))
+        # look_at_point recomputes every rotation after scaling (below), so build the
+        # rail as a pure dolly here -- the frame-0 normalisation must not bake an aim in.
+        base_orient = "fixed_forward" if orientation == "look_at_point" else orientation
+        c2w = _camplot_c2w_stack(positions, base_orient, None)
         w2c0 = torch.from_numpy(np.linalg.inv(c2w)).float().to(dev)       # [T,4,4]
         w2c0 = w2c0 @ torch.linalg.inv(w2c0[0])[None]                     # relative to the first frame
 
@@ -432,16 +478,48 @@ class HiResPanoFlythrough:
         n_dir = max(1, int(directions))
         step_deg = 360.0 / n_dir
         c2w_rel = torch.linalg.inv(w2c0)
-        rails = []
+        rails, aim_points = [], []
         for d in range(n_dir):
-            yaw = torch.from_numpy(_yaw4(d * step_deg)).float().to(dev)
+            yaw_np = _yaw4(d * step_deg)
+            yaw = torch.from_numpy(yaw_np).float().to(dev)
             rail = torch.linalg.inv(yaw[None] @ c2w_rel)
             if length > 1:
-                # Per-direction, so each azimuth's collision guard sees the geometry it
-                # actually flies towards (a wall 1m ahead must not shrink a clear path behind).
-                rail = (nvr.intersection_check(depth, rail, float(movement_scale))
-                        if scale_mode == "auto"
-                        else nvr.absolute_scale(depth, rail, float(movement_scale)))
+                if scale_mode == "auto":
+                    # Per-direction, so each azimuth's collision guard sees the geometry it
+                    # actually flies towards (a wall 1m ahead must not shrink a clear path behind).
+                    rail = nvr.intersection_check(depth, rail, float(movement_scale))
+                elif scale_mode == "absolute":
+                    rail = nvr.absolute_scale(depth, rail, float(movement_scale))
+                else:                                                     # travel
+                    rail = _travel_scale(rail, float(movement_scale) * d_ref)
+            if float(spiral_radius) > 0.0 or orientation == "look_at_point":
+                c2w_d = np.linalg.inv(rail.cpu().numpy().astype(np.float64))
+                if float(spiral_radius) > 0.0:
+                    # World units, added AFTER the path scaling: the orbit size no longer
+                    # rides on movement_scale. Frame 0's offset is still exactly zero.
+                    c2w_d[:, :3, 3] += _spiral_offsets(
+                        c2w_d, float(spiral_radius) * d_ref, float(spiral_turns),
+                        float(spiral_phase_deg))
+                if orientation == "look_at_point":
+                    # The anchor spot: where this direction's forward ray hits the scene.
+                    fwd = torch.from_numpy(yaw_np[:3, 2]).float().to(dev)
+                    aim = (fwd * _depth_toward(depth, fwd[None])[0]).cpu().numpy()
+                    c2w_d[:, :3, :3] = _camplot_c2w_stack(
+                        c2w_d[:, :3, 3].copy(), "look_at_target", aim)[:, :3, :3]
+                    aim_points.append([float(v) for v in aim])
+                rail = torch.from_numpy(np.linalg.inv(c2w_d)).float().to(dev)
+            if scale_mode == "travel" and length > 1:
+                # No collision guard in travel mode -- but say so when it matters.
+                pos = torch.linalg.inv(rail)[:, :3, 3]
+                moved = pos.norm(dim=-1)
+                keep = moved > 1e-9
+                if bool(keep.any()):
+                    ratio = moved[keep] / _depth_toward(depth, pos[keep]).clamp_min(1e-6)
+                    if float(ratio.max()) > 0.95:
+                        print(f"[HiRes] WARNING: direction {d} reaches "
+                              f"{100.0 * float(ratio.max()):.0f}% of the scene depth along its "
+                              "line of motion -- the camera may cross geometry. Lower "
+                              "movement_scale or switch scale_mode=auto.", flush=True)
             rails.append(rail)
         print(f"[HiRes] {n_dir} direction(s) x {length} frames "
               f"{(str(round(step_deg,1)) + ' deg apart') if n_dir > 1 else 'single'}{', spiral r=' + str(spiral_radius) if spiral_radius > 0 else ''}",
@@ -466,7 +544,7 @@ class HiResPanoFlythrough:
 
         total = length * n_dir
         pbar = comfy.utils.ProgressBar(total)
-        frames, masks = [], []
+        frames, masks, valids = [], [], []
         t0 = time.perf_counter()
         done = 0
         for d, w2c in enumerate(rails):
@@ -474,6 +552,7 @@ class HiResPanoFlythrough:
                 R, t = w2c[i, :3, :3], w2c[i, :3, 3]
                 rgb = None
                 hole = None
+                valid = None
                 for lv, la, lf in layers:
                     cam = lv @ R.T + t
                     clip = torch.cat([cam, torch.ones_like(cam[:, :1])], dim=1) @ K4
@@ -486,6 +565,10 @@ class HiResPanoFlythrough:
                     if rgb is None:
                         rgb = col
                         hole = ~clean if edge_mode != "stretch" else ~covered
+                        # Real, unstretched pano detail. Regardless of edge_mode: stretched
+                        # triangles, bg-layer regrowth and push-pull fills all stay invalid,
+                        # so this is the "safe for splat training" mask.
+                        valid = clean
                     else:
                         # Background layer: only fill what layer 1 could not resolve.
                         take = hole & clean
@@ -497,6 +580,7 @@ class HiResPanoFlythrough:
                     rgb = _push_pull_fill(rgb, ~hole)
                 frames.append(rgb.clamp(0, 1).cpu())
                 masks.append((~hole).float().cpu())
+                valids.append(valid.float().cpu())
                 done += 1
                 pbar.update_absolute(done, total)
             print(f"[HiRes] direction {d + 1}/{n_dir} ({d * step_deg:.0f} deg): "
@@ -516,16 +600,22 @@ class HiResPanoFlythrough:
                        "fov_deg": float(fov_deg), "edge_mode": edge_mode,
                        "pano_size": [int(pw), int(ph)], "mesh_width": mw,
                        "length": length, "directions": n_dir, "direction_step_deg": step_deg,
+                       "orientation": orientation, "scale_mode": scale_mode,
+                       "movement_scale": float(movement_scale), "median_depth": d_ref,
+                       "aim_points": aim_points,
                        "spiral": {"radius": float(spiral_radius), "turns": float(spiral_turns),
                                   "phase_deg": float(spiral_phase_deg)}}, f)
 
         img = torch.stack(frames)                                          # [D*T,H,W,3]
         msk = torch.stack(masks)[..., None].repeat(1, 1, 1, 3)             # [D*T,H,W,3] 1 = kept
+        vld = torch.stack(valids)[..., None].repeat(1, 1, 1, 3)            # [D*T,H,W,3] 1 = real detail
         hole_pct = 100.0 * (1.0 - float(msk[..., 0].mean()))
+        synth_pct = 100.0 * (1.0 - float(vld[..., 0].mean()))
         print(f"[HiRes] done: {n_dir}x{length}={total} frames at {width}x{height} from a "
               f"{pw}x{ph} pano, mode={edge_mode}, unresolved-before-fill "
-              f"{hole_pct:.2f}% of pixels", flush=True)
-        return (img, msk, cam_json)
+              f"{hole_pct:.2f}% / synthesized-or-stretched {synth_pct:.2f}% of pixels",
+              flush=True)
+        return (img, msk, cam_json, vld)
 
 
 NODE_CLASS_MAPPINGS = {"SplatKit_HiResPanoFlythrough": HiResPanoFlythrough}

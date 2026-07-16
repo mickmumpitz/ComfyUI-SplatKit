@@ -43,8 +43,10 @@ static-linked — no CUDA toolkit install required on the user's machine.
 - **Pre-fetch** before first run: `python tools/install_spheresfm.py`
 - **Offline install**: copy the bundle zip to the machine, then
   `python tools/install_spheresfm.py --zip colmap_sphere_cuda_win64.zip`
-- **Point at your own build**: set the node's `colmap_sphere_exe` input or the
-  `COLMAP_SPHERE_EXE` env var to any `colmap_sphere.exe`.
+- **Point at your own build**: set the `COLMAP_SPHERE_EXE` env var to any
+  `colmap_sphere.exe`. There is deliberately no node input for this — the nodes install
+  and resolve the binary themselves, so there's nothing to configure and nothing to get
+  wrong.
 - **Custom bundle URL**: set `COLMAP_SPHERE_BUNDLE_URL` to override the download source.
 
 ## Node options — full reference
@@ -65,7 +67,6 @@ Only `output_name` is required; everything else is optional. The IMAGE slots
 | `initial_pano` | IMAGE input | Pristine source equirect still (the image WAN was conditioned on). Dropped in at frame 0000 to anchor the reconstruction on the clean original. May be **higher resolution** than the WAN frames — see `initial_pano_hires` and the section below. |
 | `pano_frames_1` | IMAGE input | The (first) WAN equirect pano video. **Required in practice** — SfM needs frames. Declared optional only so it sits below `initial_pano` in the slot list. |
 | `pano_frames_2/3/4` | IMAGE inputs | Extra WAN pano videos (e.g. the `bf_forward` / `bf_lateral` / `bf_vertical` fusion branches). All connected batches are concatenated in order along time → **one** reconstruction covering every trajectory. |
-| `colmap_sphere_exe` | STRING, `""` | Path to `colmap_sphere.exe`. Blank → `COLMAP_SPHERE_EXE` env var → auto-downloaded binary in `bin/`. Only set to point at your own build. |
 
 ### Frame selection
 
