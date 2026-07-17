@@ -54,10 +54,12 @@ in your `loras` folder).
 
 ## Workflows
 
-Ready-made graphs in `workflows/`. Start with `1`.
+Ready-made graphs in `workflows/`. Start with `1` — or with `0` if you don't have a
+panorama yet.
 
 | | |
 |---|---|
+| `0_generate_360_panorama.json` | Make the input pano itself. Two modes on one switch: **text→pano** (Krea 2 Turbo generates a 2:1 equirect directly) and **image→pano** (Qwen-Image-Edit + a 360 LoRA turns any photo into a full ERP). Both finish with a Krea detail-refine pass and a roll-180°-inpaint seam fix, so the wrap edge is invisible. 2048×1024 default, 4096×2048 works. Needs `comfyui-LatLong` + `ComfyUI-KJNodes`. |
 | `1_camera_plot_flythrough.json` | The main graph. Draw a camera path on the pano, WAN fills it in, SphereSfM writes the dataset. |
 | `1b_camera_plot_add_to_dataset.json` | Grow an existing dataset with one more trajectory instead of rebuilding it. |
 | `2a_upscale_colmap_camera_sorted.json` | Upscale a finished dataset in place. |

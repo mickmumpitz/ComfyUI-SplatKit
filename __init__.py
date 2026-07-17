@@ -48,6 +48,18 @@ try:
 except ImportError as e:
     print(f"[SplatKit] hires dataset nodes not loaded: {e}")
 
+# Image-to-pano front-end: single photo -> partial ERP canvas + masks, plus the
+# vanishing-point FOV/pitch estimator that feeds it.
+try:
+    from .i2p_nodes import (
+        NODE_CLASS_MAPPINGS as _I2P_CLS,
+        NODE_DISPLAY_NAME_MAPPINGS as _I2P_DISP,
+    )
+    NODE_CLASS_MAPPINGS.update(_I2P_CLS)
+    NODE_DISPLAY_NAME_MAPPINGS.update(_I2P_DISP)
+except ImportError as e:
+    print(f"[SplatKit] image-to-pano nodes not loaded: {e}")
+
 # Frontend (JavaScript) extensions. ComfyUI auto-loads every .js under this dir;
 # it gives the Camera Plot node its interactive in-graph path editor. Purely
 # additive -- the node still works via its `anchors` text widget if the JS fails.
