@@ -52,8 +52,12 @@ Undo any of it:
     python tools\\prune_covered_faces.py <dataset> --restore
 
 Options:
-    --mode covered|frames|mask
-                            covered: remove the faces the hires views cover (default)
+    --mode covered|viewpoint|frames|mask
+                            covered:   remove the faces the hires views cover (default)
+                            viewpoint: remove EVERY face of every frame a hires view stands
+                                       at -- most aggressive; also drops the up/down faces
+                                       the hires path never saw, so only use it where the
+                                       hires views are dense enough to replace them
                             frames:  remove whole frames named by --frames
                             mask:    remove nothing; black the covered pixels out in
                                      masks/ instead. Strictly gentler -- a hires view is
@@ -62,6 +66,9 @@ Options:
                                      no hires view ever saw. Mask mode keeps that band
                                      supervising and only silences the redundant rays.
     --frames 0,3,10-12      frames mode: which frame indices to strip
+    --keep-frames 0         frames never touched in any mode (default 0 -- with an
+                            initial_pano, frame 0000's faces come from the pristine
+                            full-res source panorama and are the best images you have)
     --max-center-dist D     how close a hires camera must be to count as the same
                             viewpoint. Default 'auto' = 2% of the camera cloud's radius
     --samples N             NxN ray grid per face used for the coverage test (default 7)
@@ -91,7 +98,8 @@ import numpy as np
 # relative import of colmap_read_model works.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from tools import colmap_read_model as crm                         # noqa: E402
-from tools.colmap_write_model import write_images_binary           # noqa: E402
+from tools.colmap_write_model import (write_cameras_binary,        # noqa: E402
+                                      write_images_binary)
 
 crm.CAMERA_MODELS.setdefault(11, ("SPHERE", 3))     # SphereSfM's fork-specific model
 
@@ -232,16 +240,30 @@ def select(images, cameras, args):
         lines.append("max_center_dist %.4f (given)" % max_d)
     args._max_center_dist = max_d           # apply_masks re-uses the same neighbourhood
 
-    remove, hit, per_frame = set(), {}, {}
+    remove, hit, per_frame, by_frame = set(), {}, {}, {}
     want_frames = parse_frames(args.frames) if args.mode == "frames" else None
+    keep_frames = parse_frames(args.keep_frames) if args.keep_frames else set()
+    protected = 0
 
     for i, im in sorted(faces.items(), key=lambda kv: kv[1].name):
         frame = int(FACE_RE.search(im.name).group(1))
+        if frame in keep_frames:
+            protected += 1
+            continue
         if want_frames is not None and frame not in want_frames:
             continue
         near = [j for j, c in zip(his, hi_c)
                 if np.linalg.norm(c - centers[i]) <= max_d]
-        if want_frames is not None:
+        if args.mode == "viewpoint":
+            # Maximum aggression, but earned: compute the coverage as usual and decide
+            # per FRAME below -- a whole frame only goes once the hires views actually
+            # cover its horizon ring, not merely because one of them stands nearby.
+            hires_views = [(crm.qvec2rotmat(images[j].qvec), cameras[images[j].camera_id])
+                           for j in near]
+            cov = coverage(im, cameras[im.camera_id], hires_views, args.samples,
+                           args.margin_px)
+            ok = False
+        elif want_frames is not None:
             # blunt mode: the frame was named explicitly, we only sanity-check that hires
             # views really do sit at this viewpoint (unless the user waived that).
             ok = bool(near) or not args.hires_check
@@ -252,6 +274,7 @@ def select(images, cameras, args):
             cov = coverage(im, cameras[im.camera_id], hires_views, args.samples, args.margin_px)
             ok = cov >= args.min_coverage
         hit[im.name] = (i, cov)
+        by_frame.setdefault(frame, []).append(im.name)
         st = per_frame.setdefault(frame, [0, 0, 0, 0.0])
         st[0] += 1
         st[1] += bool(near)
@@ -259,6 +282,26 @@ def select(images, cameras, args):
         if ok:
             st[2] += 1
             remove.add(im.name)
+
+    if args.mode == "viewpoint":
+        # A cube has 4 faces around the horizon and 2 up/down. Once --ring-faces of a
+        # frame's faces are covered, the hires views own that viewpoint's horizon ring, and
+        # the whole low-res frame goes -- ceiling and floor included, on the argument that
+        # a viewpoint this well served does not need its 360px version at all.
+        kept_thin = 0
+        for frame, names in by_frame.items():
+            n_cov = sum(1 for n in names if hit[n][1] >= args.min_coverage)
+            if n_cov >= args.ring_faces:
+                remove.update(names)
+                per_frame[frame][2] = len(names)
+            elif n_cov:
+                kept_thin += 1
+        lines.append("viewpoint mode: a frame goes whole once >=%d of its faces reach "
+                     "coverage %.2f." % (args.ring_faces, args.min_coverage))
+        if kept_thin:
+            lines.append("%d frame(s) had SOME covered faces but not %d -- kept entirely "
+                         "(the hires views there do not close the ring)."
+                         % (kept_thin, args.ring_faces))
 
     lines.append("")
     lines.append("frame    faces  hires nearby  selected  best coverage")
@@ -270,8 +313,11 @@ def select(images, cameras, args):
             lines.append("  %05d  %5d  %12d  %8d  %13.2f" % (frame, n, nb, cv, best))
     lines.append("(%d frame(s) with hires views at their viewpoint; the rest are omitted)"
                  % shown)
+    if protected:
+        lines.append("%d face(s) of frame(s) %s held back by --keep-frames -- never selected."
+                     % (protected, ",".join("%05d" % f for f in sorted(keep_frames))))
 
-    if want_frames is None and hit:
+    if want_frames is None and args.mode != "viewpoint" and hit:
         covs = np.array([c for _, c in hit.values()])
         lines.append("")
         lines.append("face coverage histogram (share of a face's pixels the hires views "
@@ -292,6 +338,35 @@ def select(images, cameras, args):
 
 
 # -------------------------------------------------------------------------------- apply
+
+def drop_orphan_cameras(sparse):
+    """Remove cameras that no image references any more.
+
+    Pruning whole groups of faces can empty a camera out (the reprojecter writes one camera
+    per cube face, so taking every frame's face 3 leaves camera 4 with zero images). COLMAP
+    itself tolerates that, but trainers that walk cameras.bin and look each camera's images
+    up do not -- 3dgrut dies with ``KeyError: <cam_id>`` in
+    ``dataset_colmap.py::_store_camera_params_cpu``. So the model is written without them.
+
+    Returns ``(orphan_ids, backup_path_or_None)``. An existing ``cameras.bin.bak`` is left
+    alone -- it belongs to whatever wrote it, and the pristine model is in
+    ``_pruned_faces/sparse_backup`` anyway.
+    """
+    cams = crm.read_cameras_binary(os.path.join(sparse, "cameras.bin"))
+    imgs = crm.read_images_binary(os.path.join(sparse, "images.bin"))
+    used = {im.camera_id for im in imgs.values()}
+    orphans = [c for c in cams if c not in used]
+    if not orphans:
+        return [], None
+    bak = os.path.join(sparse, "cameras.bin.bak")
+    wrote = None
+    if not os.path.isfile(bak):
+        shutil.copy2(os.path.join(sparse, "cameras.bin"), bak)
+        wrote = bak
+    write_cameras_binary({c: cams[c] for c in cams if c in used},
+                         os.path.join(sparse, "cameras.bin"))
+    return orphans, wrote
+
 
 def apply_prune(root, remove, verbose):
     image_dir = os.path.join(root, "images")
@@ -335,6 +410,12 @@ def apply_prune(root, remove, verbose):
     dropped_ids = {i for i, im in images.items() if im.name in remove}
     kept = {i: im for i, im in images.items() if i not in dropped_ids}
     write_images_binary(kept, os.path.join(sparse, "images.bin"))
+    orphans, bak = drop_orphan_cameras(sparse)
+    if orphans:
+        print("dropped %d camera(s) no image references any more: %s%s (trainers that index "
+              "cameras.bin by image, e.g. 3dgrut, crash on them)"
+              % (len(orphans), ", ".join(str(c) for c in orphans),
+                 "; previous cameras.bin kept as cameras.bin.bak" if bak else ""))
 
     p3d_path = os.path.join(sparse, "points3D.bin")
     orphaned = 0
@@ -480,15 +561,24 @@ def main():
                     "already cover (dry run unless --apply).")
     ap.add_argument("dataset", help="dataset root: the folder with images/, sparse/ and "
                                     "p2s_dataset.json")
-    ap.add_argument("--mode", choices=("covered", "frames", "mask"), default="covered",
+    ap.add_argument("--mode", choices=("covered", "frames", "mask", "viewpoint"),
+                    default="covered",
                     help="covered: remove faces the hires views cover, by a geometric "
                          "ray-coverage test (default). "
+                         "viewpoint: remove EVERY face of every frame a hires view stands "
+                         "at, covered or not -- the most aggressive setting. "
                          "frames: remove whole frames named by --frames. "
                          "mask: remove nothing -- instead black the covered PIXELS out in "
                          "masks/ so only the redundant rays stop supervising.")
     ap.add_argument("--frames", default="0",
                     help="frames mode: indices to strip, e.g. '0' or '0,3,10-12' "
                          "(default: 0, the scene root)")
+    ap.add_argument("--keep-frames", default="0",
+                    help="frames that are NEVER touched, in any mode (default: 0). Frame "
+                         "0000 is the scene root, and in a dataset built with an "
+                         "initial_pano its faces are cut from the pristine full-resolution "
+                         "source panorama -- the best images in the set. Pass '' to protect "
+                         "nothing.")
     ap.add_argument("--max-center-dist", default="auto",
                     help="how close a hires camera centre must be to count as the same "
                          "viewpoint (default: auto = 2%% of the camera cloud radius)")
@@ -503,6 +593,10 @@ def main():
     ap.add_argument("--margin-px", type=float, default=8.0,
                     help="shrink each hires view by this many px before testing, so a face "
                          "is not called covered by the very edge of a view (default 8)")
+    ap.add_argument("--ring-faces", type=int, default=4,
+                    help="viewpoint mode: how many of a frame's faces must reach "
+                         "--min-coverage before the WHOLE frame is dropped (default 4 = "
+                         "the horizon ring of a cube; the up/down faces never reach it)")
     ap.add_argument("--max-remove-frac", type=float, default=0.6,
                     help="safety stop: refuse to prune more than this share of the cube "
                          "faces (default 0.6). Raise it deliberately.")
@@ -512,6 +606,10 @@ def main():
     ap.add_argument("--apply", action="store_true", help="actually do it")
     ap.add_argument("--restore", action="store_true",
                     help="undo a previous --apply from %s/" % PRUNE_DIR)
+    ap.add_argument("--repair", action="store_true",
+                    help="fix an already-pruned dataset in place: drop cameras no image "
+                         "references (3dgrut KeyError) and re-check images/ vs sparse/0. "
+                         "Writes nothing else.")
     ap.add_argument("--verbose", action="store_true", help="list every affected image")
     args = ap.parse_args()
 
@@ -533,6 +631,30 @@ def main():
     if not os.path.isfile(os.path.join(sparse, "images.bin")):
         print("no sparse/0/images.bin under %s -- is this a SplatKit dataset root?" % root)
         return 1
+
+    if args.repair:
+        orphans, bak = drop_orphan_cameras(sparse)
+        imgs = crm.read_images_binary(os.path.join(sparse, "images.bin"))
+        cams = crm.read_cameras_binary(os.path.join(sparse, "cameras.bin"))
+        files = {os.path.basename(p)
+                 for p in glob.glob(os.path.join(root, "images", "*.png"))}
+        names = {im.name for im in imgs.values()}
+        if orphans:
+            note = "dropped %s%s" % (", ".join(str(c) for c in orphans),
+                                     "; previous kept as cameras.bin.bak" if bak
+                                     else "; cameras.bin.bak already existed, left alone")
+        else:
+            note = "none orphaned -- nothing to do"
+        print("cameras : %d (%s)" % (len(cams), note))
+        print("images  : %d in sparse/0, %d files in images/" % (len(imgs), len(files)))
+        miss, orph = names - files, files - names
+        print("mismatch: %d model entries with no file, %d files not in the model"
+              % (len(miss), len(orph)))
+        for n in sorted(miss)[:5]:
+            print("   missing file: %s" % n)
+        for n in sorted(orph)[:5]:
+            print("   untracked   : %s" % n)
+        return 0 if not miss else 1
 
     cameras = crm.read_cameras_binary(os.path.join(sparse, "cameras.bin"))
     images = crm.read_images_binary(os.path.join(sparse, "images.bin"))
