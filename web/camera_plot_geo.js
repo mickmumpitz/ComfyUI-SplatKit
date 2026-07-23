@@ -1043,6 +1043,57 @@ class CamPlotGeoEditor {
 }
 
 // ---------------------------------------------------------------------------
+// Auto-suggest flight paths. Select several Geo nodes and trigger once: the server
+// analyses the cached scene-reference cloud (free space, floor/ceiling) and returns
+// one DISTINCT quick-start path per node (push-in / arc / crane / pull-back ...),
+// written straight into each node's anchors + orientation widgets. WYSIWYG: the
+// suggested anchors are literal scene units, so they land exactly on the overlay.
+// ---------------------------------------------------------------------------
+async function suggestForSelected(node) {
+  const sel = Object.values(app.canvas?.selected_nodes || {});
+  let nodes = sel.filter((n) => n.type === NODE_NAME);
+  if (!nodes.includes(node)) nodes.push(node);   // the clicked node always partakes
+  // Stable left-to-right, top-to-bottom assignment so re-running is predictable.
+  nodes.sort((a, b) => (a.pos[0] - b.pos[0]) || (a.pos[1] - b.pos[1]));
+
+  let data = null;
+  try {
+    const r = await fetch(
+      `/splatkit/suggest_paths?name=${encodeURIComponent(SCENE_REF_NAME)}` +
+      `&count=${nodes.length}`, { cache: "no-store" });
+    data = r.ok ? await r.json() : null;
+  } catch (e) { /* fall through to the error branch */ }
+
+  if (!data || data.error || !Array.isArray(data.paths) || !data.paths.length) {
+    const msg = (data && data.error) || "request failed";
+    console.warn(`[CameraPlotGeo] suggest paths: ${msg}`);
+    // Most likely cause: no cloud yet. Kick off the depth-only compute so the next
+    // click works (the button stays the single entry point).
+    if (/no scene reference/i.test(msg)) node._camPlotGeoEditor?._computeGeoFromGraph();
+    return;
+  }
+
+  nodes.forEach((n, i) => {
+    const p = data.paths[i % data.paths.length];
+    const anchorsW = n.widgets?.find((w) => w.name === "anchors");
+    const orientW = n.widgets?.find((w) => w.name === "orientation");
+    // Anchors FIRST (the editor re-parses via its widget hook), then orientation
+    // (its callback seeds/persists per-point look targets when needed).
+    if (anchorsW) {
+      anchorsW.value = formatAnchors(p.anchors, p.targets || []);
+      anchorsW.callback?.(anchorsW.value);
+    }
+    if (orientW && p.orientation) {
+      orientW.value = p.orientation;
+      orientW.callback?.(orientW.value);
+    }
+    n._camPlotGeoEditor?.render();
+    console.log(`[CameraPlotGeo] node ${n.id}: suggested "${p.label}" path`);
+  });
+  app.graph?.setDirtyCanvas(true, true);
+}
+
+// ---------------------------------------------------------------------------
 // Extension registration (separate name + node from the base editor).
 // ---------------------------------------------------------------------------
 app.registerExtension({
@@ -1062,11 +1113,27 @@ app.registerExtension({
         this.addWidget("button", "⟳ Compute geometry", null, () => {
           this._camPlotGeoEditor?._computeGeoFromGraph();
         });
+        // One click fills THIS node -- and every other selected Geo node -- with a
+        // distinct auto-recommended flight path fitted to the scene geometry.
+        this.addWidget("button", "✦ Suggest paths (all selected)", null, () => {
+          suggestForSelected(this);
+        });
         const min = this.computeSize ? this.computeSize() : [400, 0];
         this.setSize([Math.max(this.size[0], 520), Math.max(this.size[1], min[1])]);
       } catch (err) {
         console.error("[SplatKit] camera plot (geo) editor failed:", err);
       }
+      return r;
+    };
+
+    // Right-click menu mirror of the suggest button (works without scrolling to it).
+    const getExtra = nodeType.prototype.getExtraMenuOptions;
+    nodeType.prototype.getExtraMenuOptions = function (canvas, options) {
+      const r = getExtra ? getExtra.apply(this, arguments) : undefined;
+      options.push({
+        content: "SplatKit: suggest flight paths (selected)",
+        callback: () => suggestForSelected(this),
+      });
       return r;
     };
 

@@ -2220,6 +2220,29 @@ try:
             except Exception as e:
                 return _web.json_response({"points": [], "colors": [], "error": str(e)})
         return _web.json_response({"points": [], "colors": [], "count": 0})
+
+    # Auto-suggested flight paths for the Geo editor: analyse the cached cloud's free
+    # space and return `count` distinct quick-start paths (see path_suggest.py).
+    @_PS.instance.routes.get("/splatkit/suggest_paths")
+    async def _p2s_suggest_paths(request):
+        name = _safe_ref_name(request.query.get("name", "default"))
+        try:
+            count = max(1, min(8, int(request.query.get("count", "4"))))
+        except ValueError:
+            count = 4
+        path = os.path.join(_scene_ref_dir(), f"{name}.json")
+        if not os.path.exists(path):
+            return _web.json_response(
+                {"paths": [], "error": "no scene reference cloud -- compute geometry "
+                                       "first (geo button / Compute geometry)"})
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = _json.load(f)
+            from .path_suggest import suggest_paths
+            paths = suggest_paths(data.get("points") or [], count)
+            return _web.json_response({"paths": paths})
+        except Exception as e:
+            return _web.json_response({"paths": [], "error": str(e)})
 except Exception as _e:
     print(f"[SplatKit] scene-points route not registered: {_e}")
 
