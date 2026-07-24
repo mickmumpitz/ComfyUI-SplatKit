@@ -88,7 +88,6 @@ import json
 import os
 import re
 import shutil
-import struct
 import sys
 
 import numpy as np
@@ -99,7 +98,8 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from tools import colmap_read_model as crm                         # noqa: E402
 from tools.colmap_write_model import (write_cameras_binary,        # noqa: E402
-                                      write_images_binary)
+                                      write_images_binary,
+                                      write_points3D_binary)
 
 crm.CAMERA_MODELS.setdefault(11, ("SPHERE", 3))     # SphereSfM's fork-specific model
 
@@ -111,21 +111,10 @@ HIRES_RE = re.compile(r"hires_(\d+)\.", re.IGNORECASE)
 
 # --------------------------------------------------------------------------- colmap io
 
-def write_points3D_binary(points, path):
-    """Counterpart of crm.read_points3D_binary -- needed because pruning images means the
-    tracks that referenced them have to go too (a track pointing at a deleted image id is
-    what makes COLMAP's own tools KeyError on the model)."""
-    with open(path, "wb") as f:
-        f.write(struct.pack("<Q", len(points)))
-        for pid, p in points.items():
-            rgb = np.asarray(p.rgb, dtype=np.int64).ravel()
-            f.write(struct.pack("<QdddBBBd", int(pid), *np.asarray(p.xyz, float).ravel(),
-                                int(rgb[0]), int(rgb[1]), int(rgb[2]), float(p.error)))
-            ids = np.asarray(p.image_ids, dtype=np.int64).ravel()
-            idx = np.asarray(p.point2D_idxs, dtype=np.int64).ravel()
-            f.write(struct.pack("<Q", ids.size))
-            for a, b in zip(ids, idx):
-                f.write(struct.pack("<ii", int(a), int(b)))
+# write_points3D_binary now lives in tools/colmap_write_model.py alongside the cameras and
+# images writers -- pruning images means the tracks that referenced them have to go too (a
+# track pointing at a deleted image id is what makes COLMAP's own tools KeyError), and the
+# rebuild node needs the same writer.
 
 
 def intrinsics(cam):

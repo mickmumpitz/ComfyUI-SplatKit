@@ -1,14 +1,17 @@
 """Minimal COLMAP binary WRITER -- the counterpart of ``colmap_read_model``.
 
 Only what the pack needs: rewriting ``cameras.bin`` / ``images.bin`` after appending
-extra registered views to an existing reconstruction. ``points3D.bin`` is never
-rewritten (it is copied verbatim), so no writer for it.
+extra registered views to an existing reconstruction, and ``points3D.bin`` when images
+are dropped (a track that names a deleted image id is what makes COLMAP's own tools
+KeyError on the model).
 
 Layouts mirror ``colmap_read_model`` exactly, which is COLMAP 3.x's format:
 
   cameras.bin : uint64 count, then per camera  <i camera_id><i model_id><Q width><Q height><d * num_params>
   images.bin  : uint64 count, then per image   <i image_id><7d qvec+tvec><i camera_id>
                 <char* name><\0><Q num_points2D><(d x, d y, q point3D_id) * n>
+  points3D.bin: uint64 count, then per point   <Q point3D_id><3d xyz><3B rgb><d error>
+                <Q track_len><(i image_id, i point2D_idx) * track_len>
 """
 
 import struct
@@ -61,3 +64,26 @@ def write_images_binary(images, path):
             f.write(struct.pack("<Q", xys.shape[0]))
             for (x, y), pid in zip(xys, pids):
                 f.write(struct.pack("<ddq", float(x), float(y), int(pid)))
+
+
+def write_points3D_binary(points, path):
+    """points: {point3D_id: Point3D-like with .xyz/.rgb/.error/.image_ids/.point2D_idxs}.
+
+    A point whose track has been emptied (every observing image dropped) is still written:
+    it carries no observations but remains a valid 3D point, which is all a splat trainer
+    wants from the init cloud.
+    """
+    with open(path, "wb") as f:
+        f.write(struct.pack("<Q", len(points)))
+        for pid, p in points.items():
+            rgb = np.asarray(p.rgb, dtype=np.int64).ravel()
+            f.write(struct.pack("<QdddBBBd", int(pid),
+                                *np.asarray(p.xyz, dtype=np.float64).ravel().tolist(),
+                                int(rgb[0]), int(rgb[1]), int(rgb[2]), float(p.error)))
+            ids = np.asarray(p.image_ids, dtype=np.int64).ravel()
+            idx = np.asarray(p.point2D_idxs, dtype=np.int64).ravel()
+            if ids.size != idx.size:
+                raise ValueError(f"point {pid}: {ids.size} image_ids vs {idx.size} idxs")
+            f.write(struct.pack("<Q", ids.size))
+            for a, b in zip(ids, idx):
+                f.write(struct.pack("<ii", int(a), int(b)))

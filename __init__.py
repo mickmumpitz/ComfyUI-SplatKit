@@ -38,6 +38,20 @@ try:
 except ImportError as e:
     print(f"[SplatKit] hires render nodes not loaded: {e}")
 
+# Static-rig training-view renderers: 8 cameras at the corners of a cube around the
+# pano origin (each spun 360, tilted down then up), and a single camera orbiting the
+# origin with its pitch ramping from down to up. Share the hires render core; outputs
+# plug into the same "HiRes Add to Dataset" node.
+try:
+    from .cube_train_nodes import (
+        NODE_CLASS_MAPPINGS as _CUBE_CLS,
+        NODE_DISPLAY_NAME_MAPPINGS as _CUBE_DISP,
+    )
+    NODE_CLASS_MAPPINGS.update(_CUBE_CLS)
+    NODE_DISPLAY_NAME_MAPPINGS.update(_CUBE_DISP)
+except ImportError as e:
+    print(f"[SplatKit] cube training-view node not loaded: {e}")
+
 try:
     from .hires_dataset import (
         NODE_CLASS_MAPPINGS as _HRD_CLS,
@@ -47,6 +61,18 @@ try:
     NODE_DISPLAY_NAME_MAPPINGS.update(_HRD_DISP)
 except ImportError as e:
     print(f"[SplatKit] hires dataset nodes not loaded: {e}")
+
+# Repair path: reassemble sparse/0 out of the _spheresfm_work scratch dir (no SfM re-run)
+# for datasets whose camera data was lost, half-written or hand-edited.
+try:
+    from .rebuild_sparse import (
+        NODE_CLASS_MAPPINGS as _RBS_CLS,
+        NODE_DISPLAY_NAME_MAPPINGS as _RBS_DISP,
+    )
+    NODE_CLASS_MAPPINGS.update(_RBS_CLS)
+    NODE_DISPLAY_NAME_MAPPINGS.update(_RBS_DISP)
+except ImportError as e:
+    print(f"[SplatKit] rebuild-sparse node not loaded: {e}")
 
 # Image-to-pano front-end: single photo -> partial ERP canvas + masks, plus the
 # vanishing-point FOV/pitch estimator that feeds it.
