@@ -286,11 +286,46 @@ def add_hires_views(frames, cam_meta, dataset_dir, exe_path="",
     cams = crm.read_cameras_binary(os.path.join(cub_sparse, "cameras.bin"))
     imgs = crm.read_images_binary(os.path.join(cub_sparse, "images.bin"))
 
-    # One PINHOLE camera for the hires views, appended after the face camera(s).
-    cam_id = max(cams) + 1
-    cams[cam_id] = crm.Camera(id=cam_id, model="PINHOLE", width=int(w), height=int(h),
-                              params=np.array([K[0, 0], K[1, 1], K[0, 2], K[1, 2]],
-                                              dtype=np.float64))
+    # A PINHOLE camera per DISTINCT hires geometry, appended after the face camera(s).
+    #
+    # Every add re-emits ALL hires views -- this run's plus every earlier run's, which chain
+    # in through the promoted base model -- into a cameras.bin the reprojector has just
+    # rebuilt from scratch. That file holds only the 1..6 face cameras, so the old
+    # ``cam_id = max(cams) + 1`` landed on 7 EVERY time and pinned every hires view, old and
+    # new, onto this run's lens. A second batch rendered at different dimensions therefore
+    # overwrote the first batch's camera record, silently leaving those views described by
+    # the wrong focal (and sometimes the wrong aspect) -- nothing errors, the trainer just
+    # back-projects them along wrong rays for the rest of the dataset's life.
+    #
+    # Instead: recover the camera each EXISTING hires view already uses from the model we
+    # are about to overwrite, give THIS run's views this run's intrinsics, and reuse-or-
+    # allocate an id per distinct (model, size, params). Batches with identical geometry
+    # still share one camera; a batch that differs gets its own instead of clobbering.
+    prior_hcam = {}
+    _prev_c = os.path.join(sparse_dir, "cameras.bin")
+    _prev_i = os.path.join(sparse_dir, "images.bin")
+    if os.path.isfile(_prev_c) and os.path.isfile(_prev_i):
+        _pc = crm.read_cameras_binary(_prev_c)
+        for _im in crm.read_images_binary(_prev_i).values():
+            if _HIRES_RE.search(_im.name) and _im.camera_id in _pc:
+                prior_hcam[_im.name] = _pc[_im.camera_id]
+
+    def _cam_sig(model, width, height, params):
+        return (model, int(width), int(height),
+                tuple(round(float(x), 3) for x in np.asarray(params, dtype=np.float64)))
+
+    def _get_or_add_camera(model, width, height, params):
+        sig = _cam_sig(model, width, height, params)
+        for cid, c in cams.items():
+            if _cam_sig(c.model, c.width, c.height, c.params) == sig:
+                return cid
+        cid = max(cams) + 1
+        cams[cid] = crm.Camera(id=cid, model=model, width=int(width), height=int(height),
+                               params=np.asarray(params, dtype=np.float64))
+        return cid
+
+    this_params = np.array([K[0, 0], K[1, 1], K[0, 2], K[1, 2]], dtype=np.float64)
+    this_run = set(names)
     next_id = max(imgs) + 1
     empty_xy = np.zeros((0, 2), dtype=np.float64)
     empty_id = np.zeros((0,), dtype=np.int64)
@@ -298,6 +333,11 @@ def add_hires_views(frames, cam_meta, dataset_dir, exe_path="",
     for im in sorted(final_imgs.values(), key=lambda x: x.name):
         if im.name not in hires_names:
             continue
+        if im.name in this_run or im.name not in prior_hcam:
+            cam_id = _get_or_add_camera("PINHOLE", w, h, this_params)
+        else:                       # an earlier batch's view: keep the lens it was shot with
+            _p = prior_hcam[im.name]
+            cam_id = _get_or_add_camera(_p.model, _p.width, _p.height, _p.params)
         # Pose straight from SfM, in the reprojector's (identical) world. No 2D points:
         # the reprojector renumbers point3D ids, so the originals would dangle.
         imgs[next_id] = crm.Image(id=next_id, qvec=im.qvec, tvec=im.tvec,
@@ -305,6 +345,12 @@ def add_hires_views(frames, cam_meta, dataset_dir, exe_path="",
                                   xys=empty_xy, point3D_ids=empty_id)
         next_id += 1
         added += 1
+    _hcams = sorted({im.camera_id for im in imgs.values() if _HIRES_RE.search(im.name)})
+    if len(_hcams) > 1:
+        print("[HiRes/add] %d distinct hires camera(s) kept: %s -- batches rendered at "
+              "different dimensions each keep their own lens"
+              % (len(_hcams), ", ".join("%d (%dx%d)" % (c, cams[c].width, cams[c].height)
+                                        for c in _hcams)), flush=True)
     write_cameras_binary(cams, os.path.join(sparse_dir, "cameras.bin"))
     write_images_binary(imgs, os.path.join(sparse_dir, "images.bin"))
     shutil.copy2(os.path.join(cub_sparse, "points3D.bin"),
