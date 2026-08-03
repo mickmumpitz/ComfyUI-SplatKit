@@ -3,7 +3,7 @@
 Runs the node class directly (no ComfyUI graph) and writes frames + hole masks so
 the four edge_modes can be eyeballed side by side:
 
-    python tests/test_hires_flythrough.py --pano D:/comfy/ComfyUI/input/040_CafeLounge_pano.png
+    python tests/test_hires_flythrough.py --pano <ComfyUI>/input/my_pano.png
 """
 import argparse
 import json

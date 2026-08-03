@@ -28,7 +28,7 @@ to ``_removed_views/``. ``--restore`` puts the dataset back exactly as it was.
 
 Dry run (prints what WOULD go, writes nothing):
 
-    python tools\\remove_views.py D:\\comfy\\ComfyUI\\output\\220_studio-garden-11_masked
+    python tools\\remove_views.py <ComfyUI>\\output\\my_scene_masked
 
 Apply it:
 

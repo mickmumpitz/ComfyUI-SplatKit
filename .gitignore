@@ -9,3 +9,5 @@ tests/_colmap_out/
 # Local build artifacts / prebuilt wheels -- never committed to the pack.
 wheels/
 _input/
+# ComfyUI /object_info dump -- captured locally, leaks the author's folder contents. Never commit.
+objinfo.json

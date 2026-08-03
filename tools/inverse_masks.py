@@ -15,7 +15,7 @@ Both supervise the same Gaussians. Wherever they overlap, the WAN pixels drag th
 evidence back towards their own invented detail. ``prune_covered_faces.py`` attacks that by
 REMOVING faces, and its ``--mode mask`` blacks out covered pixels -- but its coverage test
 compares ray DIRECTIONS, which is only valid where a face and a hires view share a camera
-centre. In a real dataset that is a small minority (in 220_studio-garden-08: 300 of 3720
+centre. In a real dataset that is a small minority (in one test scene: 300 of 3720
 faces), because the hires fly-through roams the scene instead of sitting at the pano origin.
 
 So the honest question -- "does this WAN pixel look at a surface some hires view already
@@ -59,7 +59,7 @@ Nothing is deleted and no image is moved. Only ``masks/`` is rewritten; the orig
 
 Usage (dry run -- renders, reports, writes nothing):
 
-    python tools\\inverse_masks.py D:\\comfy\\ComfyUI\\output\\220_studio-garden-08_pruned
+    python tools\\inverse_masks.py <ComfyUI>\\output\\my_scene_pruned
 
 Apply it:
 

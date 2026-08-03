@@ -31,7 +31,7 @@ filtered -- so the pruned dataset trains (and re-upscales) with no other change.
 
 Usage (dry run -- prints what WOULD go, writes nothing):
 
-    python tools\\prune_covered_faces.py D:\\comfy\\ComfyUI\\output\\220_studio-garden-07
+    python tools\\prune_covered_faces.py <ComfyUI>\\output\\my_scene
 
 Apply it:
 
