@@ -1,0 +1,126 @@
+{
+  "last_node_id": 7,
+  "last_link_id": 8,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "Note",
+      "pos": [40, 40],
+      "size": [470, 380],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "properties": {},
+      "widgets_values": [
+        "OPTION A - UPSCALE A SphereSfM COLMAP DATASET (camera-sorted)\n\nUSE THIS when your SphereSfM node ran in mode=colmap_now (the default) and you\nalready have a cube-face COLMAP dataset (images/ + sparse/0/). It upscales that\ndataset IN PLACE.\n\nWHY camera-sorted: the cube reprojecer writes 6 faces per video frame. Read\nlexically (frame-by-frame) the view direction flips 6x per frame, so a temporal\nupscaler has no stable context. 'Load Dataset Images Ordered' reads the\np2s_dataset.json marker and loads each cube FACE as a coherent per-view sub-video\n(camera-major), then writes every upscaled frame back to its ORIGINAL filename so\nCOLMAP sparse/0/images.bin still matches.\n\nHOW TO USE\n- Set 'dataset_name' on the Load node to your SphereSfM output_name.\n- Keep 'lowres_suffix' identical on the Load and Save nodes.\n- order_names flows Load -> Save automatically; don't edit it.\n\nSAFE + IDEMPOTENT\n- First run: images/ -> images_lowres/ (kept forever); upscaled frames written\n  into images/ under the SAME filenames.\n- Re-run: reads originals from images_lowres/; overwrites images/.\n\nBATCH SIZE (important): SeedVR2 chunks frames as range(0, total, batch_size) from\nframe 0, blind to the per-view boundaries. batch_size is preset to 81 so every chunk\nlands inside ONE 81-frame view: no temporal bleed across seams and no ragged final\nbatch. The Load node also PRINTS a 'suggested_batch_size' to the console (largest 4n+1\ndivisor of your actual per-view length) -- if your WAN length isn't 81, set batch_size\nto that printed value. OOM? drop to the next 4n+1 divisor down (81 -> 9), or lower\nresolution / enable VAE tiling / DiT offload. uniform_batch_size is ON as a safety\nnet. Do NOT use 5/13/21 -- they don't divide 81 and will straddle seams."
+      ],
+      "color": "#432",
+      "bgcolor": "#653"
+    },
+    {
+      "id": 2,
+      "type": "SplatKit_LoadDatasetImagesOrdered",
+      "pos": [40, 450],
+      "size": [400, 130],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {"name": "images", "type": "IMAGE", "links": [1], "slot_index": 0},
+        {"name": "order_names", "type": "STRING", "links": [8], "slot_index": 1},
+        {"name": "canonical_dir", "type": "STRING", "links": [5], "slot_index": 2},
+        {"name": "group_sizes", "type": "STRING", "links": null, "slot_index": 3},
+        {"name": "suggested_batch_size", "type": "INT", "links": null, "slot_index": 4}
+      ],
+      "properties": {"Node name for S&R": "SplatKit_LoadDatasetImagesOrdered"},
+      "widgets_values": ["my_scene", "", "_lowres"]
+    },
+    {
+      "id": 4,
+      "type": "SeedVR2LoadDiTModel",
+      "pos": [520, 450],
+      "size": [360, 200],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [
+        {"name": "torch_compile_args", "type": "TORCH_COMPILE_ARGS", "link": null, "shape": 7}
+      ],
+      "outputs": [
+        {"name": "SEEDVR2_DIT", "type": "SEEDVR2_DIT", "links": [6], "slot_index": 0}
+      ],
+      "properties": {"Node name for S&R": "SeedVR2LoadDiTModel"},
+      "widgets_values": ["seedvr2_ema_3b_fp8_e4m3fn.safetensors", "cuda:0", 0, false, "none", false, "sdpa"]
+    },
+    {
+      "id": 5,
+      "type": "SeedVR2LoadVAEModel",
+      "pos": [520, 700],
+      "size": [360, 260],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [
+        {"name": "torch_compile_args", "type": "TORCH_COMPILE_ARGS", "link": null, "shape": 7}
+      ],
+      "outputs": [
+        {"name": "SEEDVR2_VAE", "type": "SEEDVR2_VAE", "links": [7], "slot_index": 0}
+      ],
+      "properties": {"Node name for S&R": "SeedVR2LoadVAEModel"},
+      "widgets_values": ["ema_vae_fp16.safetensors", "cuda:0", false, 1024, 128, false, 1024, 128, "false", "none", false]
+    },
+    {
+      "id": 7,
+      "type": "SeedVR2VideoUpscaler",
+      "pos": [920, 450],
+      "size": [360, 380],
+      "flags": {},
+      "order": 4,
+      "mode": 0,
+      "inputs": [
+        {"name": "image", "type": "IMAGE", "link": 1},
+        {"name": "dit", "type": "SEEDVR2_DIT", "link": 6},
+        {"name": "vae", "type": "SEEDVR2_VAE", "link": 7}
+      ],
+      "outputs": [
+        {"name": "IMAGE", "type": "IMAGE", "links": [4], "slot_index": 0}
+      ],
+      "properties": {"Node name for S&R": "SeedVR2VideoUpscaler"},
+      "widgets_values": [42, "fixed", 2048, 0, 81, true, "lab", 0, 0, 0, 0, "cpu", false]
+    },
+    {
+      "id": 6,
+      "type": "SplatKit_SaveUpscaledDataset",
+      "pos": [1320, 450],
+      "size": [400, 150],
+      "flags": {},
+      "order": 5,
+      "mode": 0,
+      "inputs": [
+        {"name": "images", "type": "IMAGE", "link": 4},
+        {"name": "canonical_dir", "type": "STRING", "link": 5, "widget": {"name": "canonical_dir"}},
+        {"name": "order_names", "type": "STRING", "link": 8, "widget": {"name": "order_names"}}
+      ],
+      "outputs": [
+        {"name": "images_dir", "type": "STRING", "links": null, "slot_index": 0}
+      ],
+      "properties": {"Node name for S&R": "SplatKit_SaveUpscaledDataset"},
+      "widgets_values": ["", "_lowres", ""]
+    }
+  ],
+  "links": [
+    [1, 2, 0, 7, 0, "IMAGE"],
+    [6, 4, 0, 7, 1, "SEEDVR2_DIT"],
+    [7, 5, 0, 7, 2, "SEEDVR2_VAE"],
+    [4, 7, 0, 6, 0, "IMAGE"],
+    [5, 2, 2, 6, 1, "STRING"],
+    [8, 2, 1, 6, 2, "STRING"]
+  ],
+  "groups": [],
+  "config": {},
+  "extra": {},
+  "version": 0.4
+}
