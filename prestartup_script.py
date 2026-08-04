@@ -6,7 +6,7 @@
 # late and cv2.imwrite/imread on .exr raises "OpenEXR codec is disabled".
 #
 # The pack writes/reads .exr depth maps throughout the pipeline (firstframe_depth.exr,
-# per-frame depth in matrix3d_equirect), so the codec must be enabled. Setting it here
+# per-frame depth in core/matrix3d_pipeline), so the codec must be enabled. Setting it here
 # guarantees it is live before the first cv2 import in the process.
 import os
 

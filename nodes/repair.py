@@ -48,9 +48,9 @@ import shutil
 
 import numpy as np
 
-from . import spheresfm_colmap as sfm
-from .tools import colmap_read_model as crm
-from .tools.colmap_write_model import (write_cameras_binary, write_images_binary,
+from ..core import spheresfm_colmap as sfm
+from ..tools import colmap_read_model as crm
+from ..tools.colmap_write_model import (write_cameras_binary, write_images_binary,
                                        write_points3D_binary)
 
 crm.CAMERA_MODELS.setdefault(11, ("SPHERE", 3))     # SphereSfM's fork-specific model

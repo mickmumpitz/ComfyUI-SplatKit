@@ -15,7 +15,7 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 _PKG_DIR = os.path.dirname(_HERE)
 
 _spec = importlib.util.spec_from_file_location(
-    "path_suggest", os.path.join(_PKG_DIR, "path_suggest.py"))
+    "path_suggest", os.path.join(_PKG_DIR, "core", "path_suggest.py"))
 ps = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(ps)
 

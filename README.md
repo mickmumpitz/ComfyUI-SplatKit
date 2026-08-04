@@ -57,46 +57,66 @@ in your `loras` folder).
 Ready-made graphs in `workflows/`. Start with `1` — or with `0` if you don't have a
 panorama yet.
 
-| | |
-|---|---|
-| `0_generate_360_panorama.json` | Make the input pano itself. Two modes on one switch: **text→pano** (Krea 2 Turbo generates a 2:1 equirect directly) and **image→pano** (Qwen-Image-Edit + a 360 LoRA turns any photo into a full ERP). Both finish with a Krea detail-refine pass and a roll-180°-inpaint seam fix, so the wrap edge is invisible. 2048×1024 default, 4096×2048 works. Needs `comfyui-LatLong` + `ComfyUI-KJNodes`. |
-| `1_camera_plot_flythrough.json` | The main graph. Draw a camera path on the pano, WAN fills it in, SphereSfM writes the dataset. |
-| `1b_camera_plot_add_to_dataset.json` | Grow an existing dataset with one more trajectory instead of rebuilding it. |
-| `2a_upscale_colmap_camera_sorted.json` | Upscale a finished dataset in place. |
-| `2b_upscale_panorama_then_sfm.json` | Upscale the panoramas *first*, then run SfM on them. Better quality. |
-| `3_hires_flythrough.json` | Render high-resolution pinhole views straight from the pano (no WAN). |
-| `4_hires_add_to_dataset.json` | Register those hi-res views into an existing dataset. |
+| | | Also needs |
+|---|---|---|
+| `0_generate_360_panorama-upscale.json` | Make the input pano itself. Two modes on one switch: **text→pano** (Krea 2 Turbo generates a 2:1 equirect directly) and **image→pano** (Qwen-Image-Edit + a 360 LoRA turns any photo into a full ERP). Both finish with a detail-refine pass, a roll-180°-inpaint seam fix so the wrap edge is invisible, and an upscale tail. | `comfyui-LatLong`, `ComfyUI-KJNodes`, `ComfyUI_essentials`, `ComfyUI_UltimateSDUpscale`, `ComfyUI-SeedVR2_VideoUpscaler`, `ComfyUI-Easy-Use` |
+| `1_camera_plot_flythrough.json` | The main graph. Draw a camera path on the pano, WAN fills it in, SphereSfM writes the dataset. | — |
+| `1b_camera_plot_add_to_dataset.json` | Grow an existing dataset with one more trajectory instead of rebuilding it. | — |
+| `2a_upscale_colmap_camera_sorted.json` | Upscale a finished dataset in place, in camera-major order. | `ComfyUI-SeedVR2_VideoUpscaler` |
+| `2b1_upscale_panorama_frames.json` | *Best quality, step 1 of 2.* Upscale the saved equirect panoramas frame-by-frame to 8K and stream them to disk. | `ComfyUI-VideoHelperSuite`, `ComfyUI_UltimateSDUpscale`, `ComfyUI_essentials` |
+| `2b2_sfm_from_upscaled.json` | *Step 2.* Run SphereSfM on the upscaled panoramas from `2b1`. | `ComfyUI-VideoHelperSuite` |
+| `2b2_sfm_from_upscaled_dualres.json` | Same as above, dual-res variant: SfM solves on downscaled panos, cube faces are cut from the full 8K. Cheaper solve, sharper faces. | `ComfyUI-VideoHelperSuite` |
+| `4_hires_add_to_dataset.json` | Render high-resolution pinhole views straight from the pano (no WAN) and register them into an existing dataset. | `ComfyUI-VideoHelperSuite` |
+| `_all_nodes_overview.json` | Not a pipeline — a catalogue. Every node in the pack, grouped by module, all muted so Queue does nothing. Load it to see the whole surface at once. | — |
+
+Everything else these graphs use is core ComfyUI. Install the packs in the right-hand
+column only for the workflows you actually run — nothing in the node pack itself depends
+on them.
 
 **The prompt matters.** It must describe the *actual* scene in the panorama — a generic or
 wrong prompt visibly degrades what WAN paints into the holes.
 
 ## Nodes
 
-All under the **SplatKit** category.
+Eighteen nodes, all under the **SplatKit** category. There is no dead code behind them:
+every class in the pack is registered. Load `workflows/_all_nodes_overview.json` to see
+them all laid out at once.
 
-**Core** — `Dataset Project`, `MoGe Model Loader`, `Camera Plot Fly-Through` (and its
-`(Geometry)` variant, which shows the scene point cloud while you place anchors),
-`Camera Plot Scene Reference`, `Render Control Video`, `Wan I2V Masked-Video Conditioning`,
-`Save Pano Frames` / `Load Pano Frames`.
+**Core** (`nodes/common.py`, `nodes/camera_plot.py`, `nodes/wan.py`) — `Dataset Project`,
+`MoGe Model Loader`, `Camera Plot Fly-Through (Geometry)` (draw the camera path against the
+scene point cloud), `Camera Plot Scene Reference`, `Wan I2V Masked-Video Conditioning`.
 
-**Dataset builders** — `SphereSfM Dataset` (the recommended path: classical SfM → COLMAP),
-`SphereSfM Add Camera Path`, `Build Equirect Dataset` and `Build Equirect Dataset (Fused)`
-(an equirect dataset for trainers that accept 360° images directly, e.g. LichtFeld `--gut`),
-`Equirect to Camera View`, `Pano Video to Perspective Views`.
+**Dataset builders** (`nodes/spheresfm.py`) — `SphereSfM Dataset` (the recommended path:
+classical SfM → COLMAP), `SphereSfM Dataset (Dual-Res)`, `SphereSfM Add Camera Path`.
 
-**Upscaling** — `Resolve Dataset Images`, `Load Dataset Images (Ordered)`,
-`Save Upscaled Dataset`.
+**Upscaling** (`nodes/upscale.py`) — `Resolve Dataset Images`,
+`Load Dataset Images (Ordered)`, `Save Upscaled Dataset`, `Save Upscaled Frames (Streaming)`.
 
-**Hi-res** — `HiRes Pano Fly-Through`, `Add HiRes Views to Dataset`.
+**Hi-res** (`nodes/hires.py`, `nodes/hires_dataset.py`) — `HiRes Pano Fly-Through`,
+`Add HiRes Views to Dataset`.
+
+**Image to pano** (`nodes/i2p.py`) — `Persp to ERP Warp`, `Estimate FOV`, `Switch`. The
+front end workflow `0` uses in image→pano mode.
+
+**Repair** (`nodes/repair.py`) — `Rebuild COLMAP Sparse` reassembles `sparse/0` from the
+`_spheresfm_work/` scratch dir without re-running SfM, for a dataset whose camera data was
+lost or half-written.
+
+Two nodes appear in no shipped workflow but are load-bearing, not leftovers.
+`MoGe Model Loader` is the only producer of the `MOGE_MODEL` socket that the fly-through
+nodes expose (load MoGe once, reuse it across nodes). `Camera Plot Scene Reference` is
+injected by the editor when you press *compute geometry*: it has to be a real node, because
+the panorama it consumes comes from an arbitrary upstream subgraph that only the execution
+engine can evaluate.
 
 ### Camera Plot
 
-The interactive path editor (`web/camera_plot.js`) lets you drag anchors directly on the
-panorama in the graph. The `(Geometry)` variant additionally renders the MoGe point cloud
-behind the path, so you can see whether you're about to fly the camera through a wall. If
-the JS ever fails to load, the node still works — the path is just a text widget.
+The interactive path editor (`web/camera_plot_geo.js`) lets you drag anchors directly on
+the panorama in the graph, and renders the MoGe point cloud behind the path so you can see
+whether you're about to fly the camera through a wall. If the JS ever fails to load, the
+node still works — the path is just a text widget.
 
-### Upscaling: why there are two workflows
+### Upscaling: why there are two routes
 
 SeedVR2 is a **temporal** upscaler, so the order it reads frames in matters.
 
@@ -106,10 +126,14 @@ SeedVR2 is a **temporal** upscaler, so the order it reads frames in matters.
   **camera-major** order in `p2s_dataset.json`, and `Load Dataset Images (Ordered)` feeds
   the upscaler each cube face as a coherent per-view sub-video, writing every frame back to
   its original filename so `sparse/0/images.bin` still matches.
-- **`mode=panorama_only`** → `2b`, *best quality*. Skips SfM and saves the raw equirect
-  panoramas. The workflow upscales the already-coherent equirect video (zero view seams),
-  then runs SphereSfM on the **upscaled** panoramas — sharper input means denser features
-  and a cleaner cloud.
+- **`mode=panorama_only`** → `2b1` then `2b2`, *best quality*. Skips SfM and saves the raw
+  equirect panoramas. `2b1` upscales them to 8K **one frame at a time**, streaming each
+  result straight to disk (`Save Upscaled Frames (Streaming)`); `2b2` then runs SphereSfM on
+  the upscaled panoramas — sharper input means denser features and a cleaner cloud.
+
+  The split into two graphs is not cosmetic: holding a whole 8K panorama sequence in a
+  single tensor is tens of GB, so `2b1` runs at `meta_batch=1` and never materialises the
+  full stack. Run `2b1` to completion, then `2b2`.
 
 Both folder swaps are idempotent: originals move to `<images>_lowres/` and are kept forever;
 re-runs read the originals.
@@ -194,6 +218,43 @@ was removed. These two backends are the only code paths.
 triton vs torch (`compare_triton.py`) — matching masks, u/v/z bit-exact where the same
 triangle wins. Perf on a 5090, 49-frame fly-through at 2048×1024: raster stage 4.9 s
 (torch) / 2.6 s (triton).
+
+## Repo layout
+
+Only two `.py` files sit at the pack root, and both are there because ComfyUI hard-codes
+the location: `__init__.py` (the loader imports the pack directory and reads
+`NODE_CLASS_MAPPINGS` off it) and `prestartup_script.py` (scanned by exact filename and run
+*before* any node import — it enables the OpenEXR codec, which must happen before the first
+`import cv2`). Everything else is grouped:
+
+```
+__init__.py            re-exports the mappings from nodes/
+prestartup_script.py   OpenEXR codec enable, run pre-import by ComfyUI
+
+nodes/                 the ComfyUI layer -- INPUT_TYPES, tensor unpacking, thin calls
+  common.py            output paths, MoGe plumbing, Dataset Project, MoGe Model Loader
+  camera_plot.py       fly-through node, scene-reference cloud, editor HTTP routes
+  wan.py               Wan I2V masked-video conditioning
+  spheresfm.py         COLMAP dataset build + add-a-trajectory
+  hires.py             HiRes pinhole fly-through     hires_dataset.py  register them
+  upscale.py           dataset upscaling add-on      repair.py         COLMAP repair
+  i2p.py               image-to-pano front end (workflow 0)
+
+core/                  the engine. No ComfyUI imports at all. spheresfm_colmap (SfM),
+                       matrix3d_pipeline (MoGe depth + mesh render), fov_estimate,
+                       gpu_lsmr (GPU least-squares), path_suggest (camera-path planner).
+shim/                  pure-PyTorch / triton nvdiffrast replacement (see below)
+vendored/              third-party source: MoGe, utils3d, Matrix-3D utils
+web/                   in-graph camera path editor (JS)
+tools/                 standalone maintenance scripts (`python tools/<name>.py`)
+tests/                 rasterizer + planner checks, no ComfyUI needed
+workflows/             the graphs in the table above
+```
+
+Module names inside `core/` are deliberately distinctive (`gpu_lsmr`, not `solve.py`).
+The vendored tree and the `tools/` scripts reach them by bare name off a `sys.path` entry
+that `matrix3d_pipeline.setup_paths()` adds, so a generic name there could shadow another
+node pack's module.
 
 ## Licenses
 

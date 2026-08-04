@@ -102,9 +102,11 @@ import sys
 import numpy as np
 
 # Importable both as ``python tools/inverse_masks.py`` and from inside the pack: put the
-# pack ROOT on sys.path so ``tools`` and the vendored tree resolve as packages.
+# pack ROOT on sys.path so ``tools`` and the vendored tree resolve as packages, plus
+# core/ so the engine modules resolve by bare name (no package context in script mode).
 _PACK = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _PACK)
+sys.path.insert(0, os.path.join(_PACK, "core"))
 
 os.environ.setdefault("OPENCV_IO_ENABLE_OPENEXR", "1")   # before cv2, as prestartup does
 

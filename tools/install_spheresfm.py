@@ -15,8 +15,12 @@ import os
 import sys
 import zipfile
 
-# import the node's resolver so we reuse one source of truth for paths + download logic
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# import the node's resolver so we reuse one source of truth for paths + download logic.
+# Run as a plain script, so the pack is not a package -- reach core/ by adding it to
+# sys.path and importing the module by its (globally distinctive) bare name.
+_PACK = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, _PACK)
+sys.path.insert(0, os.path.join(_PACK, "core"))
 import spheresfm_colmap as s  # noqa: E402
 
 

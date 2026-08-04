@@ -50,11 +50,13 @@ import torch.nn.functional as F
 import comfy.model_management
 import comfy.utils
 
-from . import matrix3d_pipeline as mp
-from .nodes import (
+from ..core import matrix3d_pipeline as mp
+from .camera_plot import (
     _camplot_c2w_stack,
     _camplot_catmull_rom,
     _camplot_parse_anchors_ext,
+)
+from .common import (
     _moge_ckpt_input,
     _moge_for_node,
     _moge_model_input,
@@ -412,7 +414,7 @@ class HiResPanoFlythrough:
                moge_ckpt=_MOGE_AUTO, moge_model=None, output_name="comfy_hires",
                directions=6, spiral_radius=0.0, spiral_turns=1.0, spiral_phase_deg=0.0):
         import time
-        from .shim import nvdiffrast_shim as dr
+        from ..shim import nvdiffrast_shim as dr
 
         dev = str(comfy.model_management.get_torch_device())
         pano = np.clip(panorama[0].cpu().numpy() * 255.0, 0, 255).astype(np.uint8)   # [H,W,3] RGB

@@ -40,29 +40,26 @@ import sys
 OLD_PREFIX = "P2SMatrix_"
 NEW_PREFIX = "SplatKit_"
 
-# The 20 nodes that shipped in SplatKit. A P2SMatrix_<suffix> id is remappable iff
-# <suffix> appears here -- everything else was left behind in the old pack.
+# The 15 nodes that ship in SplatKit 1.0. A P2SMatrix_<suffix> id is remappable iff
+# <suffix> appears here -- everything else was left behind in the old pack or retired
+# before 1.0 (Render Control Video, the equirect dataset builders, the pano->perspective
+# view nodes, Save/Load Pano Frames, and the non-geometry Camera Plot).
 SHIPPED = {
     "WanI2VMaskedConditioning",
     "DatasetProject",
-    "RenderControlInProcess",
-    "CameraPlotRenderControl",
     "CameraPlotRenderControlGeo",
     "CameraPlotSceneReference",
-    "BuildEquirectDataset",
-    "BuildEquirectDatasetFused",
-    "PanoToPerspectiveViews",
-    "EquirectCameraView",
     "SphereSfMDataset",
     "SphereSfMAddToDataset",
-    "SaveWanPanoFrames",
-    "LoadWanPanoFrames",
     "MoGeModelLoader",
     "ResolveDatasetImages",
     "LoadDatasetImagesOrdered",
     "SaveUpscaledDataset",
+    "SaveUpscaledFramesStreaming",
+    "SphereSfMDatasetDualRes",
     "HiResPanoFlythrough",
     "AddHiResViewsToDataset",
+    "RebuildSparseFromWork",
 }
 
 OLD_REPO = "mickmumpitz/ComfyUI-Pano2Splat-Matrix"

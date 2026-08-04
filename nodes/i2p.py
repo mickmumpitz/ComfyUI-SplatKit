@@ -16,7 +16,7 @@ Three nodes:
                       is pruned rather than computed and discarded. Generic, not
                       i2p-specific; it lives here because this is where it came from.
 
-Registered from __init__.py alongside the other add-on modules.
+Driven by workflow 0 (image->pano mode).
 """
 import math
 
@@ -25,7 +25,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from . import fov_estimate as fe
+from ..core import fov_estimate as fe
 
 
 def _parse_color(s, default=(0.0, 0.0, 0.0)):

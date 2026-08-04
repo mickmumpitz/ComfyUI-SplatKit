@@ -117,7 +117,7 @@ Only `output_name` is required; everything else is optional. The IMAGE slots
 
 | Option | Type / default | What it does |
 |---|---|---|
-| `mode` | `colmap_now` / `panorama_only`, default `colmap_now` | `colmap_now` = run SfM now and output a cube-face COLMAP dataset (then upscale in place with the *camera-sorted* upscale workflow). `panorama_only` = **skip SfM**, just save the raw equirect panoramas; the *panorama* upscale workflow (`workflows/2b_upscale_panorama_then_sfm.json`) then upscales the coherent equirect video and runs SphereSfM on the upscaled panoramas (**best quality**). |
+| `mode` | `colmap_now` / `panorama_only`, default `colmap_now` | `colmap_now` = run SfM now and output a cube-face COLMAP dataset (then upscale in place with the *camera-sorted* upscale workflow). `panorama_only` = **skip SfM**, just save the raw equirect panoramas; the *panorama* upscale workflow (`workflows/2b1_upscale_panorama_frames.json` + `workflows/2b2_sfm_from_upscaled.json`) then upscales the coherent equirect video and runs SphereSfM on the upscaled panoramas (**best quality**). |
 | `initial_pano_mode` | `replace` / `prepend`, default `replace` | Only used when `initial_pano` is connected. `replace` = overwrite WAN's frame 0 with the pristine pano (same view → avoids a near-duplicate; recommended). `prepend` = keep WAN's frame 0 and insert the pano just before it (adds one frame; use if WAN's first frame already drifted). See below. |
 | `initial_pano_hires` | BOOLEAN, default `True` | Keep `initial_pano` at its **native** (higher) resolution instead of downscaling it to the WAN frame size. `True` (recommended for a hi-res pano): the pano is registered as its **own SPHERE camera** (a second `feature_extractor` pass via `--image_list_path`), so its 6 cube faces are reprojected from the sharp original — set `face_size` high to keep that detail. `False`: resize the pano down to the WAN resolution (one shared camera) — a fallback if your `colmap_sphere` build rejects the multi-camera path. |
 
@@ -243,7 +243,7 @@ Outputs: `model_dir` (STRING), `num_images` (INT, total cube faces), `num_points
 ## For maintainers: publishing / updating the binary
 
 The binary is **not** committed to git. It's distributed as a GitHub Release asset and
-fetched by `spheresfm_colmap.py` (`_BUNDLE_REPO` / `_BUNDLE_TAG` / `_BUNDLE_ASSET` /
+fetched by `core/spheresfm_colmap.py` (`_BUNDLE_REPO` / `_BUNDLE_TAG` / `_BUNDLE_ASSET` /
 `_BUNDLE_SHA256`). To publish a (new) build:
 
 1. Build/refresh `bin/` (exe + runtime DLLs + `LICENSE` + `COPYING.txt` + `BUILD_INFO.txt`).
@@ -251,7 +251,7 @@ fetched by `spheresfm_colmap.py` (`_BUNDLE_REPO` / `_BUNDLE_TAG` / `_BUNDLE_ASSE
    ```
    cd bin && zip -r ../colmap_sphere_cuda_win64.zip .
    ```
-3. Compute its SHA-256 and paste it into `_BUNDLE_SHA256` in `spheresfm_colmap.py`
+3. Compute its SHA-256 and paste it into `_BUNDLE_SHA256` in `core/spheresfm_colmap.py`
    (also bump `_BUNDLE_TAG` if you change the release tag).
 4. Create a GitHub Release on the repo named in `_BUNDLE_REPO` (currently still
    `mickmumpitz/ComfyUI-Pano2Splat-Matrix`, this pack's previous name -- re-point it at

@@ -1,7 +1,7 @@
 {
   "id": "wf1-upscale-panorama-frames",
   "revision": 0,
-  "last_node_id": 104,
+  "last_node_id": 106,
   "last_link_id": 23,
   "nodes": [
     {
@@ -153,7 +153,7 @@
           ]
         }
       ],
-      "title": "Wan 2.1 VAE (Krea 2 \u2014 correct as-is)",
+      "title": "Wan 2.1 VAE (Krea 2 — correct as-is)",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.27.0",
@@ -633,49 +633,6 @@
       ]
     },
     {
-      "id": 22,
-      "type": "ResolutionPicker",
-      "pos": [
-        45.60210139135242,
-        2477.130387872926
-      ],
-      "size": [
-        270,
-        150
-      ],
-      "flags": {},
-      "order": 8,
-      "mode": 0,
-      "inputs": [],
-      "outputs": [
-        {
-          "name": "width",
-          "type": "INT",
-          "links": [
-            5
-          ]
-        },
-        {
-          "name": "height",
-          "type": "INT",
-          "links": [
-            6
-          ]
-        }
-      ],
-      "properties": {
-        "cnr_id": "comfyui-mickmumpitz-nodes",
-        "ver": "900234969a52d6e1e0686267613037eaa8a3fa37",
-        "Node name for S&R": "ResolutionPicker"
-      },
-      "widgets_values": [
-        "Custom",
-        "16:9",
-        8192,
-        4096
-      ]
-    },
-    {
       "id": 23,
       "type": "CLIPLoader",
       "pos": [
@@ -746,7 +703,7 @@
           ]
         }
       ],
-      "title": "Negative (empty \u2014 cfg 1)",
+      "title": "Negative (empty — cfg 1)",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.27.0",
@@ -969,6 +926,76 @@
       ],
       "color": "#432",
       "bgcolor": "#653"
+    },
+    {
+      "id": 105,
+      "type": "PrimitiveInt",
+      "pos": [
+        45.60210139135242,
+        2477.130387872926
+      ],
+      "size": [
+        270,
+        82
+      ],
+      "flags": {},
+      "order": 8,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "INT",
+          "type": "INT",
+          "links": [
+            5
+          ]
+        }
+      ],
+      "title": "Pano Width",
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.27.0",
+        "Node name for S&R": "PrimitiveInt"
+      },
+      "widgets_values": [
+        8192,
+        "fixed"
+      ]
+    },
+    {
+      "id": 106,
+      "type": "PrimitiveInt",
+      "pos": [
+        45.60210139135242,
+        2587.130387872926
+      ],
+      "size": [
+        270,
+        82
+      ],
+      "flags": {},
+      "order": 8,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "INT",
+          "type": "INT",
+          "links": [
+            6
+          ]
+        }
+      ],
+      "title": "Pano Height",
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.27.0",
+        "Node name for S&R": "PrimitiveInt"
+      },
+      "widgets_values": [
+        4096,
+        "fixed"
+      ]
     }
   ],
   "links": [
@@ -1006,7 +1033,7 @@
     ],
     [
       5,
-      22,
+      105,
       0,
       13,
       1,
@@ -1014,8 +1041,8 @@
     ],
     [
       6,
-      22,
-      1,
+      106,
+      0,
       13,
       2,
       "INT"

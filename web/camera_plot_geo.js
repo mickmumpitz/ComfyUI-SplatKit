@@ -1,6 +1,6 @@
 // SplatKit :: interactive in-graph camera-path editor, GEOMETRY variant.
 //
-// Self-contained copy of camera_plot.js that targets the SEPARATE node
+// In-graph path editor for the SplatKit Camera Plot node
 // `SplatKit_CameraPlotRenderControlGeo`, so the original Camera Plot node and its
 // editor stay completely untouched. On top of the base editor it overlays the scene
 // geometry from MoGe (cached server-side, fetched over /splatkit/scene_points), so
@@ -1110,14 +1110,17 @@ app.registerExtension({
         // Manual trigger: a real button on the node that runs the depth-only compute
         // (Comfy's "execute selected" would run the FULL render instead, so we provide
         // our own cheap path).
+        // `serialize: false` is REQUIRED. ComfyUI stores widgets_values positionally, so
+        // a serialising button appends a `null` to every saved graph; a later real widget
+        // then lands on that index and silently loads `null` instead of its default.
         this.addWidget("button", "⟳ Compute geometry", null, () => {
           this._camPlotGeoEditor?._computeGeoFromGraph();
-        });
+        }, { serialize: false });
         // One click fills THIS node -- and every other selected Geo node -- with a
         // distinct auto-recommended flight path fitted to the scene geometry.
         this.addWidget("button", "✦ Suggest paths (all selected)", null, () => {
           suggestForSelected(this);
-        });
+        }, { serialize: false });
         const min = this.computeSize ? this.computeSize() : [400, 0];
         this.setSize([Math.max(this.size[0], 520), Math.max(this.size[1], min[1])]);
       } catch (err) {

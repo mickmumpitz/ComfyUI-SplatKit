@@ -1624,10 +1624,7 @@
         "camplot_path2",
         4000,
         "",
-        "auto (download)",
-        "",
-        null,
-        null
+        "auto (download)"
       ]
     },
     {
@@ -1707,10 +1704,7 @@
         "camplot_path3",
         4000,
         "",
-        "auto (download)",
-        "",
-        null,
-        null
+        "auto (download)"
       ]
     },
     {
@@ -1790,10 +1784,7 @@
         "camplot_path4",
         4000,
         "",
-        "auto (download)",
-        "",
-        null,
-        null
+        "auto (download)"
       ]
     },
     {
@@ -2045,10 +2036,7 @@
         "camplot_path4",
         4000,
         "",
-        "auto (download)",
-        "",
-        null,
-        null
+        "auto (download)"
       ]
     },
     {
@@ -2126,10 +2114,7 @@
         "camplot_path1",
         4000,
         "",
-        "auto (download)",
-        "",
-        null,
-        null
+        "auto (download)"
       ]
     },
     {
@@ -2949,7 +2934,7 @@
     },
     {
       "id": 70,
-      "type": "MickmumpitzLabel",
+      "type": "MarkdownNote",
       "pos": [
         -850.3241509305641,
         -38.177790226656626
@@ -2958,30 +2943,19 @@
         1060.63330078125,
         136
       ],
-      "flags": {
-        "allow_interaction": true
-      },
+      "flags": {},
       "order": 7,
       "mode": 0,
       "inputs": [],
       "outputs": [],
-      "title": "MickmumpitzLabel",
-      "properties": {
-        "text": "MODELS & SETTINGS",
-        "fontSize": 100,
-        "fontFamily": "Arial",
-        "fontColor": "#ffffff",
-        "textAlign": "left",
-        "backgroundColor": "transparent",
-        "padding": 8,
-        "borderRadius": 0
-      },
-      "color": "#fff0",
-      "bgcolor": "#fff0"
+      "properties": {},
+      "widgets_values": [
+        "## MODELS & SETTINGS"
+      ]
     },
     {
       "id": 71,
-      "type": "MickmumpitzLabel",
+      "type": "MarkdownNote",
       "pos": [
         -840.3241509305637,
         -178.1777902266568
@@ -2990,30 +2964,19 @@
         449.3333435058594,
         76
       ],
-      "flags": {
-        "allow_interaction": true
-      },
+      "flags": {},
       "order": 8,
       "mode": 0,
       "inputs": [],
       "outputs": [],
-      "title": "MickmumpitzLabel",
-      "properties": {
-        "text": "BY MICKMUMPITZ",
-        "fontSize": 50,
-        "fontFamily": "Arial",
-        "fontColor": "#ffffff",
-        "textAlign": "left",
-        "backgroundColor": "transparent",
-        "padding": 8,
-        "borderRadius": 0
-      },
-      "color": "#fff0",
-      "bgcolor": "#fff0"
+      "properties": {},
+      "widgets_values": [
+        "### BY MICKMUMPITZ"
+      ]
     },
     {
       "id": 72,
-      "type": "MickmumpitzLabel",
+      "type": "MarkdownNote",
       "pos": [
         -860.3241509305641,
         -368.17779022665593
@@ -3022,26 +2985,15 @@
         3953.60009765625,
         256
       ],
-      "flags": {
-        "allow_interaction": true
-      },
+      "flags": {},
       "order": 9,
       "mode": 0,
       "inputs": [],
       "outputs": [],
-      "title": "MickmumpitzLabel",
-      "properties": {
-        "text": "CONSISTENT CHARACTER CREATOR 4.0",
-        "fontSize": 200,
-        "fontFamily": "Arial",
-        "fontColor": "#ffffff",
-        "textAlign": "left",
-        "backgroundColor": "transparent",
-        "padding": 8,
-        "borderRadius": 0
-      },
-      "color": "#fff0",
-      "bgcolor": "#fff0"
+      "properties": {},
+      "widgets_values": [
+        "# SPLATKIT — PANORAMA TO GAUSSIAN SPLAT DATASET"
+      ]
     },
     {
       "id": 68,

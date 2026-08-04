@@ -5,86 +5,14 @@
 import os
 os.environ.setdefault("OPENCV_IO_ENABLE_OPENEXR", "1")
 
+# All node classes live in nodes/; that package merges its submodules' mappings and
+# survives a partial import failure on its own (see nodes/__init__.py).
 try:
     from .nodes import NODE_CLASS_MAPPINGS, NODE_DISPLAY_NAME_MAPPINGS
 except ImportError as e:
     print(f"[SplatKit] failed to load nodes: {e}")
     NODE_CLASS_MAPPINGS = {}
     NODE_DISPLAY_NAME_MAPPINGS = {}
-
-# Dataset upscaling add-on (resolve images dir + safe folder-swap save). Kept in
-# its own module; failure to load must not break the active pipeline.
-try:
-    from .upscale_nodes import (
-        NODE_CLASS_MAPPINGS as _UPS_CLS,
-        NODE_DISPLAY_NAME_MAPPINGS as _UPS_DISP,
-    )
-    NODE_CLASS_MAPPINGS.update(_UPS_CLS)
-    NODE_DISPLAY_NAME_MAPPINGS.update(_UPS_DISP)
-except ImportError as e:
-    print(f"[SplatKit] upscale nodes not loaded: {e}")
-
-# High-resolution pinhole fly-through straight from a pano + MoGe depth (geometry
-# and texture resolution decoupled, disocclusions closed instead of torn open) and
-# the node that registers those renders into an existing SphereSfM dataset as a
-# mixed SPHERE + PINHOLE reconstruction. See workflows/3_ and 4_.
-try:
-    from .hires_nodes import (
-        NODE_CLASS_MAPPINGS as _HR_CLS,
-        NODE_DISPLAY_NAME_MAPPINGS as _HR_DISP,
-    )
-    NODE_CLASS_MAPPINGS.update(_HR_CLS)
-    NODE_DISPLAY_NAME_MAPPINGS.update(_HR_DISP)
-except ImportError as e:
-    print(f"[SplatKit] hires render nodes not loaded: {e}")
-
-# Static-rig training-view renderers: 8 cameras at the corners of a cube around the
-# pano origin (each spun 360, tilted down then up), and a single camera orbiting the
-# origin with its pitch ramping from down to up. Share the hires render core; outputs
-# plug into the same "HiRes Add to Dataset" node.
-try:
-    from .cube_train_nodes import (
-        NODE_CLASS_MAPPINGS as _CUBE_CLS,
-        NODE_DISPLAY_NAME_MAPPINGS as _CUBE_DISP,
-    )
-    NODE_CLASS_MAPPINGS.update(_CUBE_CLS)
-    NODE_DISPLAY_NAME_MAPPINGS.update(_CUBE_DISP)
-except ImportError as e:
-    print(f"[SplatKit] cube training-view node not loaded: {e}")
-
-try:
-    from .hires_dataset import (
-        NODE_CLASS_MAPPINGS as _HRD_CLS,
-        NODE_DISPLAY_NAME_MAPPINGS as _HRD_DISP,
-    )
-    NODE_CLASS_MAPPINGS.update(_HRD_CLS)
-    NODE_DISPLAY_NAME_MAPPINGS.update(_HRD_DISP)
-except ImportError as e:
-    print(f"[SplatKit] hires dataset nodes not loaded: {e}")
-
-# Repair path: reassemble sparse/0 out of the _spheresfm_work scratch dir (no SfM re-run)
-# for datasets whose camera data was lost, half-written or hand-edited.
-try:
-    from .rebuild_sparse import (
-        NODE_CLASS_MAPPINGS as _RBS_CLS,
-        NODE_DISPLAY_NAME_MAPPINGS as _RBS_DISP,
-    )
-    NODE_CLASS_MAPPINGS.update(_RBS_CLS)
-    NODE_DISPLAY_NAME_MAPPINGS.update(_RBS_DISP)
-except ImportError as e:
-    print(f"[SplatKit] rebuild-sparse node not loaded: {e}")
-
-# Image-to-pano front-end: single photo -> partial ERP canvas + masks, plus the
-# vanishing-point FOV/pitch estimator that feeds it.
-try:
-    from .i2p_nodes import (
-        NODE_CLASS_MAPPINGS as _I2P_CLS,
-        NODE_DISPLAY_NAME_MAPPINGS as _I2P_DISP,
-    )
-    NODE_CLASS_MAPPINGS.update(_I2P_CLS)
-    NODE_DISPLAY_NAME_MAPPINGS.update(_I2P_DISP)
-except ImportError as e:
-    print(f"[SplatKit] image-to-pano nodes not loaded: {e}")
 
 # Frontend (JavaScript) extensions. ComfyUI auto-loads every .js under this dir;
 # it gives the Camera Plot node its interactive in-graph path editor. Purely

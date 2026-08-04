@@ -117,7 +117,7 @@ def write_panorama_dataset(frames, out_dir, sfm_params=None):
 
 # Pack-local bundle location: the SphereSfM CUDA binary lives here. It's auto-downloaded
 # on first use (see below) and git-ignored, so it never bloats the repo.
-_PACK_DIR = os.path.dirname(os.path.abspath(__file__))
+_PACK_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # core/ -> pack root
 _BIN_DIR = os.path.join(_PACK_DIR, "bin")
 _PACK_BIN = os.path.join(_BIN_DIR, "colmap_sphere.exe")
 

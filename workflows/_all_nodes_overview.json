@@ -1,0 +1,1357 @@
+{
+  "id": "splatkit-all-nodes-overview",
+  "revision": 0,
+  "last_node_id": 27,
+  "last_link_id": 0,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "MarkdownNote",
+      "pos": [
+        0,
+        40
+      ],
+      "size": [
+        360,
+        60
+      ],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "properties": {},
+      "widgets_values": [
+        "## Project & models\n`nodes/common.py`"
+      ]
+    },
+    {
+      "id": 2,
+      "type": "SplatKit_DatasetProject",
+      "pos": [
+        0,
+        120
+      ],
+      "size": [
+        360,
+        140
+      ],
+      "flags": {},
+      "order": 2,
+      "mode": 2,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "dataset_dir",
+          "type": "STRING",
+          "links": []
+        },
+        {
+          "name": "control_rgb_prefix",
+          "type": "STRING",
+          "links": []
+        },
+        {
+          "name": "control_mask_prefix",
+          "type": "STRING",
+          "links": []
+        }
+      ],
+      "title": "Dataset Project",
+      "properties": {
+        "cnr_id": "comfyui-splatkit",
+        "Node name for S&R": "SplatKit_DatasetProject"
+      },
+      "widgets_values": [
+        "my_scene",
+        false
+      ]
+    },
+    {
+      "id": 3,
+      "type": "SplatKit_MoGeModelLoader",
+      "pos": [
+        0,
+        320
+      ],
+      "size": [
+        360,
+        80
+      ],
+      "flags": {},
+      "order": 3,
+      "mode": 2,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "moge_model",
+          "type": "MOGE_MODEL",
+          "links": []
+        }
+      ],
+      "title": "MoGe Model Loader",
+      "properties": {
+        "cnr_id": "comfyui-splatkit",
+        "Node name for S&R": "SplatKit_MoGeModelLoader"
+      },
+      "widgets_values": [
+        "auto (download)"
+      ]
+    },
+    {
+      "id": 4,
+      "type": "MarkdownNote",
+      "pos": [
+        460,
+        40
+      ],
+      "size": [
+        360,
+        60
+      ],
+      "flags": {},
+      "order": 4,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "properties": {},
+      "widgets_values": [
+        "## Camera Plot\n`nodes/camera_plot.py`"
+      ]
+    },
+    {
+      "id": 5,
+      "type": "SplatKit_CameraPlotRenderControlGeo",
+      "pos": [
+        460,
+        120
+      ],
+      "size": [
+        360,
+        316
+      ],
+      "flags": {},
+      "order": 5,
+      "mode": 2,
+      "inputs": [
+        {
+          "name": "panorama",
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "moge_model",
+          "type": "MOGE_MODEL",
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "name": "control_video",
+          "type": "IMAGE",
+          "links": []
+        },
+        {
+          "name": "control_mask",
+          "type": "IMAGE",
+          "links": []
+        },
+        {
+          "name": "condition_dir",
+          "type": "STRING",
+          "links": []
+        },
+        {
+          "name": "camera_preview",
+          "type": "IMAGE",
+          "links": []
+        }
+      ],
+      "title": "Camera Plot Fly-Through (Geometry)",
+      "properties": {
+        "cnr_id": "comfyui-splatkit",
+        "Node name for S&R": "SplatKit_CameraPlotRenderControlGeo"
+      },
+      "widgets_values": [
+        "0, 0, 0\n0.6, 0.1, 1.5\n-0.4, 0.2, 3.0\n0.3, 0.0, 4.5",
+        "look_forward",
+        81,
+        "comfy_camplot",
+        4000,
+        "",
+        "auto (download)"
+      ]
+    },
+    {
+      "id": 6,
+      "type": "SplatKit_CameraPlotSceneReference",
+      "pos": [
+        460,
+        496
+      ],
+      "size": [
+        360,
+        184
+      ],
+      "flags": {},
+      "order": 6,
+      "mode": 2,
+      "inputs": [
+        {
+          "name": "panorama",
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "moge_model",
+          "type": "MOGE_MODEL",
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "name": "panorama",
+          "type": "IMAGE",
+          "links": []
+        },
+        {
+          "name": "status",
+          "type": "STRING",
+          "links": []
+        }
+      ],
+      "title": "Camera Plot Scene Reference",
+      "properties": {
+        "cnr_id": "comfyui-splatkit",
+        "Node name for S&R": "SplatKit_CameraPlotSceneReference"
+      },
+      "widgets_values": [
+        "default",
+        4000,
+        "auto (download)"
+      ]
+    },
+    {
+      "id": 7,
+      "type": "MarkdownNote",
+      "pos": [
+        920,
+        40
+      ],
+      "size": [
+        360,
+        60
+      ],
+      "flags": {},
+      "order": 7,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "properties": {},
+      "widgets_values": [
+        "## WAN conditioning\n`nodes/wan.py`"
+      ]
+    },
+    {
+      "id": 8,
+      "type": "SplatKit_WanI2VMaskedConditioning",
+      "pos": [
+        920,
+        120
+      ],
+      "size": [
+        360,
+        338
+      ],
+      "flags": {},
+      "order": 8,
+      "mode": 2,
+      "inputs": [
+        {
+          "name": "positive",
+          "type": "CONDITIONING",
+          "link": null
+        },
+        {
+          "name": "negative",
+          "type": "CONDITIONING",
+          "link": null
+        },
+        {
+          "name": "vae",
+          "type": "VAE",
+          "link": null
+        },
+        {
+          "name": "control_video",
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "control_mask",
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "clip_vision_output",
+          "type": "CLIP_VISION_OUTPUT",
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "name": "positive",
+          "type": "CONDITIONING",
+          "links": []
+        },
+        {
+          "name": "negative",
+          "type": "CONDITIONING",
+          "links": []
+        },
+        {
+          "name": "latent",
+          "type": "LATENT",
+          "links": []
+        }
+      ],
+      "title": "Wan I2V Masked-Video Conditioning",
+      "properties": {
+        "cnr_id": "comfyui-splatkit",
+        "Node name for S&R": "SplatKit_WanI2VMaskedConditioning"
+      },
+      "widgets_values": [
+        1440,
+        720,
+        81,
+        "black",
+        false
+      ]
+    },
+    {
+      "id": 9,
+      "type": "MarkdownNote",
+      "pos": [
+        1380,
+        40
+      ],
+      "size": [
+        360,
+        60
+      ],
+      "flags": {},
+      "order": 9,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "properties": {},
+      "widgets_values": [
+        "## SphereSfM datasets\n`nodes/spheresfm.py`"
+      ]
+    },
+    {
+      "id": 10,
+      "type": "SplatKit_SphereSfMAddToDataset",
+      "pos": [
+        1380,
+        120
+      ],
+      "size": [
+        360,
+        492
+      ],
+      "flags": {},
+      "order": 10,
+      "mode": 2,
+      "inputs": [
+        {
+          "name": "pano_frames_1",
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "pano_frames_2",
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "pano_frames_3",
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "pano_frames_4",
+          "type": "IMAGE",
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "name": "model_dir",
+          "type": "STRING",
+          "links": []
+        },
+        {
+          "name": "num_images",
+          "type": "INT",
+          "links": []
+        },
+        {
+          "name": "num_points",
+          "type": "INT",
+          "links": []
+        },
+        {
+          "name": "num_added_frames",
+          "type": "INT",
+          "links": []
+        }
+      ],
+      "title": "SphereSfM Add Camera Path",
+      "properties": {
+        "cnr_id": "comfyui-splatkit",
+        "Node name for S&R": "SplatKit_SphereSfMAddToDataset"
+      },
+      "widgets_values": [
+        "",
+        1,
+        0,
+        "exhaustive",
+        false,
+        true,
+        0,
+        8192,
+        0.0066,
+        10.0,
+        32768,
+        30,
+        "camera_major"
+      ]
+    },
+    {
+      "id": 11,
+      "type": "SplatKit_SphereSfMDataset",
+      "pos": [
+        1380,
+        672
+      ],
+      "size": [
+        360,
+        602
+      ],
+      "flags": {},
+      "order": 11,
+      "mode": 2,
+      "inputs": [
+        {
+          "name": "initial_pano",
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "pano_frames_1",
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "pano_frames_2",
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "pano_frames_3",
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "pano_frames_4",
+          "type": "IMAGE",
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "name": "model_dir",
+          "type": "STRING",
+          "links": []
+        },
+        {
+          "name": "num_images",
+          "type": "INT",
+          "links": []
+        },
+        {
+          "name": "num_points",
+          "type": "INT",
+          "links": []
+        }
+      ],
+      "title": "SphereSfM Dataset",
+      "properties": {
+        "cnr_id": "comfyui-splatkit",
+        "Node name for S&R": "SplatKit_SphereSfMDataset"
+      },
+      "widgets_values": [
+        "spheresfm_dataset",
+        1,
+        0,
+        "sequential",
+        0,
+        8192,
+        0.0066,
+        10.0,
+        32768,
+        4.0,
+        1.5,
+        4.0,
+        30,
+        1.0,
+        "colmap_now",
+        "camera_major",
+        "replace",
+        true
+      ]
+    },
+    {
+      "id": 12,
+      "type": "MarkdownNote",
+      "pos": [
+        1840,
+        40
+      ],
+      "size": [
+        360,
+        60
+      ],
+      "flags": {},
+      "order": 12,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "properties": {},
+      "widgets_values": [
+        "## Hi-res render\n`nodes/hires.py`"
+      ]
+    },
+    {
+      "id": 13,
+      "type": "SplatKit_HiResPanoFlythrough",
+      "pos": [
+        1840,
+        120
+      ],
+      "size": [
+        360,
+        602
+      ],
+      "flags": {},
+      "order": 13,
+      "mode": 2,
+      "inputs": [
+        {
+          "name": "panorama",
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "moge_model",
+          "type": "MOGE_MODEL",
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "name": "frames",
+          "type": "IMAGE",
+          "links": []
+        },
+        {
+          "name": "hole_mask",
+          "type": "IMAGE",
+          "links": []
+        },
+        {
+          "name": "cameras_json",
+          "type": "STRING",
+          "links": []
+        },
+        {
+          "name": "splat_mask",
+          "type": "IMAGE",
+          "links": []
+        }
+      ],
+      "title": "HiRes Pano Fly-Through",
+      "properties": {
+        "cnr_id": "comfyui-splatkit",
+        "Node name for S&R": "SplatKit_HiResPanoFlythrough"
+      },
+      "widgets_values": [
+        "0, 0, 0\n0.15, 0, 0.4\n0.3, 0.05, 0.8",
+        "look_forward",
+        49,
+        1920,
+        1080,
+        75.0,
+        "layered",
+        0.15,
+        "auto",
+        "1024",
+        0.05,
+        24,
+        9,
+        1920,
+        "auto (download)",
+        "comfy_hires",
+        6,
+        0.0,
+        1.0,
+        0.0
+      ]
+    },
+    {
+      "id": 14,
+      "type": "MarkdownNote",
+      "pos": [
+        2300,
+        40
+      ],
+      "size": [
+        360,
+        60
+      ],
+      "flags": {},
+      "order": 14,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "properties": {},
+      "widgets_values": [
+        "## Hi-res dataset\n`nodes/hires_dataset.py`"
+      ]
+    },
+    {
+      "id": 15,
+      "type": "SplatKit_AddHiResViewsToDataset",
+      "pos": [
+        2300,
+        120
+      ],
+      "size": [
+        360,
+        316
+      ],
+      "flags": {},
+      "order": 15,
+      "mode": 2,
+      "inputs": [
+        {
+          "name": "frames",
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "cameras_json",
+          "type": "STRING",
+          "link": null
+        },
+        {
+          "name": "splat_mask",
+          "type": "IMAGE",
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "name": "dataset_dir",
+          "type": "STRING",
+          "links": []
+        },
+        {
+          "name": "report",
+          "type": "STRING",
+          "links": []
+        },
+        {
+          "name": "num_registered",
+          "type": "INT",
+          "links": []
+        },
+        {
+          "name": "num_points",
+          "type": "INT",
+          "links": []
+        }
+      ],
+      "title": "Add HiRes Views to Dataset",
+      "properties": {
+        "cnr_id": "comfyui-splatkit",
+        "Node name for S&R": "SplatKit_AddHiResViewsToDataset"
+      },
+      "widgets_values": [
+        "",
+        true,
+        false,
+        1,
+        8192,
+        30
+      ]
+    },
+    {
+      "id": 16,
+      "type": "MarkdownNote",
+      "pos": [
+        2760,
+        40
+      ],
+      "size": [
+        360,
+        60
+      ],
+      "flags": {},
+      "order": 16,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "properties": {},
+      "widgets_values": [
+        "## Upscaling\n`nodes/upscale.py`"
+      ]
+    },
+    {
+      "id": 17,
+      "type": "SplatKit_LoadDatasetImagesOrdered",
+      "pos": [
+        2760,
+        120
+      ],
+      "size": [
+        360,
+        228
+      ],
+      "flags": {},
+      "order": 17,
+      "mode": 2,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "links": []
+        },
+        {
+          "name": "order_names",
+          "type": "STRING",
+          "links": []
+        },
+        {
+          "name": "canonical_dir",
+          "type": "STRING",
+          "links": []
+        },
+        {
+          "name": "group_sizes",
+          "type": "STRING",
+          "links": []
+        },
+        {
+          "name": "suggested_batch_size",
+          "type": "INT",
+          "links": []
+        }
+      ],
+      "title": "Load Dataset Images (Ordered)",
+      "properties": {
+        "cnr_id": "comfyui-splatkit",
+        "Node name for S&R": "SplatKit_LoadDatasetImagesOrdered"
+      },
+      "widgets_values": [
+        "my_scene",
+        "",
+        "_lowres",
+        -1
+      ]
+    },
+    {
+      "id": 18,
+      "type": "SplatKit_ResolveDatasetImages",
+      "pos": [
+        2760,
+        408
+      ],
+      "size": [
+        360,
+        162
+      ],
+      "flags": {},
+      "order": 18,
+      "mode": 2,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "load_dir",
+          "type": "STRING",
+          "links": []
+        },
+        {
+          "name": "canonical_dir",
+          "type": "STRING",
+          "links": []
+        },
+        {
+          "name": "suggested_batch_size",
+          "type": "INT",
+          "links": []
+        }
+      ],
+      "title": "Resolve Dataset Images",
+      "properties": {
+        "cnr_id": "comfyui-splatkit",
+        "Node name for S&R": "SplatKit_ResolveDatasetImages"
+      },
+      "widgets_values": [
+        "my_scene",
+        "",
+        "_lowres"
+      ]
+    },
+    {
+      "id": 19,
+      "type": "SplatKit_SaveUpscaledDataset",
+      "pos": [
+        2760,
+        630
+      ],
+      "size": [
+        360,
+        140
+      ],
+      "flags": {},
+      "order": 19,
+      "mode": 2,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "name": "images_dir",
+          "type": "STRING",
+          "links": []
+        }
+      ],
+      "title": "Save Upscaled Dataset",
+      "properties": {
+        "cnr_id": "comfyui-splatkit",
+        "Node name for S&R": "SplatKit_SaveUpscaledDataset"
+      },
+      "widgets_values": [
+        "",
+        "_lowres",
+        ""
+      ]
+    },
+    {
+      "id": 20,
+      "type": "SplatKit_SaveUpscaledFramesStreaming",
+      "pos": [
+        2760,
+        830
+      ],
+      "size": [
+        360,
+        184
+      ],
+      "flags": {},
+      "order": 20,
+      "mode": 2,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "meta_batch",
+          "type": "VHS_BatchManager",
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "name": "images_dir",
+          "type": "STRING",
+          "links": []
+        }
+      ],
+      "title": "Save Upscaled Frames (Streaming)",
+      "properties": {
+        "cnr_id": "comfyui-splatkit",
+        "Node name for S&R": "SplatKit_SaveUpscaledFramesStreaming"
+      },
+      "widgets_values": [
+        "",
+        "_upscaled",
+        "",
+        "{i:05d}.png"
+      ]
+    },
+    {
+      "id": 21,
+      "type": "SplatKit_SphereSfMDatasetDualRes",
+      "pos": [
+        2760,
+        1074
+      ],
+      "size": [
+        360,
+        536
+      ],
+      "flags": {},
+      "order": 21,
+      "mode": 2,
+      "inputs": [
+        {
+          "name": "pano_frames_1",
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "pano_frames_2",
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "pano_frames_3",
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "pano_frames_4",
+          "type": "IMAGE",
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "name": "model_dir",
+          "type": "STRING",
+          "links": []
+        },
+        {
+          "name": "num_images",
+          "type": "INT",
+          "links": []
+        },
+        {
+          "name": "num_points",
+          "type": "INT",
+          "links": []
+        }
+      ],
+      "title": "SphereSfM Dataset (Dual-Res: low-res SfM + 8K faces)",
+      "properties": {
+        "cnr_id": "comfyui-splatkit",
+        "Node name for S&R": "SplatKit_SphereSfMDatasetDualRes"
+      },
+      "widgets_values": [
+        "",
+        "my_scene",
+        "exhaustive",
+        "stop",
+        0,
+        8192,
+        0.0066,
+        10.0,
+        32768,
+        4.0,
+        1.5,
+        4.0,
+        30,
+        1.0,
+        "camera_major",
+        "*.png"
+      ]
+    },
+    {
+      "id": 22,
+      "type": "MarkdownNote",
+      "pos": [
+        3220,
+        40
+      ],
+      "size": [
+        360,
+        60
+      ],
+      "flags": {},
+      "order": 22,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "properties": {},
+      "widgets_values": [
+        "## Repair\n`nodes/repair.py`"
+      ]
+    },
+    {
+      "id": 23,
+      "type": "SplatKit_RebuildSparseFromWork",
+      "pos": [
+        3220,
+        120
+      ],
+      "size": [
+        360,
+        294
+      ],
+      "flags": {},
+      "order": 23,
+      "mode": 2,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "dataset_dir",
+          "type": "STRING",
+          "links": []
+        },
+        {
+          "name": "sparse_dir",
+          "type": "STRING",
+          "links": []
+        },
+        {
+          "name": "num_images",
+          "type": "INT",
+          "links": []
+        },
+        {
+          "name": "num_points",
+          "type": "INT",
+          "links": []
+        },
+        {
+          "name": "report",
+          "type": "STRING",
+          "links": []
+        }
+      ],
+      "title": "Rebuild COLMAP Sparse",
+      "properties": {
+        "cnr_id": "comfyui-splatkit",
+        "Node name for S&R": "SplatKit_RebuildSparseFromWork"
+      },
+      "widgets_values": [
+        "",
+        true,
+        true,
+        false,
+        true,
+        "",
+        ""
+      ]
+    },
+    {
+      "id": 24,
+      "type": "MarkdownNote",
+      "pos": [
+        3680,
+        40
+      ],
+      "size": [
+        360,
+        60
+      ],
+      "flags": {},
+      "order": 24,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "properties": {},
+      "widgets_values": [
+        "## Image to pano\n`nodes/i2p.py`"
+      ]
+    },
+    {
+      "id": 25,
+      "type": "SplatKit_EstimateFOV",
+      "pos": [
+        3680,
+        120
+      ],
+      "size": [
+        360,
+        162
+      ],
+      "flags": {},
+      "order": 25,
+      "mode": 2,
+      "inputs": [
+        {
+          "name": "image",
+          "type": "IMAGE",
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "name": "h_fov_deg",
+          "type": "FLOAT",
+          "links": []
+        },
+        {
+          "name": "pitch_deg",
+          "type": "FLOAT",
+          "links": []
+        },
+        {
+          "name": "status",
+          "type": "STRING",
+          "links": []
+        },
+        {
+          "name": "debug",
+          "type": "IMAGE",
+          "links": []
+        }
+      ],
+      "title": "Estimate FOV",
+      "properties": {
+        "cnr_id": "comfyui-splatkit",
+        "Node name for S&R": "SplatKit_EstimateFOV"
+      },
+      "widgets_values": [
+        65.0
+      ]
+    },
+    {
+      "id": 26,
+      "type": "SplatKit_PerspToErpWarp",
+      "pos": [
+        3680,
+        342
+      ],
+      "size": [
+        360,
+        382
+      ],
+      "flags": {},
+      "order": 26,
+      "mode": 2,
+      "inputs": [
+        {
+          "name": "image",
+          "type": "IMAGE",
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "name": "control_video",
+          "type": "IMAGE",
+          "links": []
+        },
+        {
+          "name": "control_mask",
+          "type": "IMAGE",
+          "links": []
+        },
+        {
+          "name": "inpaint_mask",
+          "type": "MASK",
+          "links": []
+        },
+        {
+          "name": "erp_guide",
+          "type": "IMAGE",
+          "links": []
+        }
+      ],
+      "title": "Persp to ERP Warp",
+      "properties": {
+        "cnr_id": "comfyui-splatkit",
+        "Node name for S&R": "SplatKit_PerspToErpWarp"
+      },
+      "widgets_values": [
+        1440,
+        720,
+        5,
+        90.0,
+        0.0,
+        0.0,
+        8,
+        2.0,
+        10,
+        0.55,
+        "#000000"
+      ]
+    },
+    {
+      "id": 27,
+      "type": "SplatKit_Switch",
+      "pos": [
+        3680,
+        784
+      ],
+      "size": [
+        360,
+        118
+      ],
+      "flags": {},
+      "order": 27,
+      "mode": 2,
+      "inputs": [
+        {
+          "name": "image_a",
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "image_b",
+          "type": "IMAGE",
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "name": "image",
+          "type": "IMAGE",
+          "links": []
+        }
+      ],
+      "title": "Switch",
+      "properties": {
+        "cnr_id": "comfyui-splatkit",
+        "Node name for S&R": "SplatKit_Switch"
+      },
+      "widgets_values": [
+        true
+      ]
+    }
+  ],
+  "links": [],
+  "groups": [
+    {
+      "id": 1,
+      "title": "Project & models",
+      "bounding": [
+        -20,
+        20,
+        400,
+        480
+      ],
+      "color": "#3f789e",
+      "flags": {}
+    },
+    {
+      "id": 2,
+      "title": "Camera Plot",
+      "bounding": [
+        440,
+        20,
+        400,
+        760
+      ],
+      "color": "#7341ff",
+      "flags": {}
+    },
+    {
+      "id": 3,
+      "title": "WAN conditioning",
+      "bounding": [
+        900,
+        20,
+        400,
+        538
+      ],
+      "color": "#a1309b",
+      "flags": {}
+    },
+    {
+      "id": 4,
+      "title": "SphereSfM datasets",
+      "bounding": [
+        1360,
+        20,
+        400,
+        1354
+      ],
+      "color": "#2a7d3f",
+      "flags": {}
+    },
+    {
+      "id": 5,
+      "title": "Hi-res render",
+      "bounding": [
+        1820,
+        20,
+        400,
+        802
+      ],
+      "color": "#b58b2a",
+      "flags": {}
+    },
+    {
+      "id": 6,
+      "title": "Hi-res dataset",
+      "bounding": [
+        2280,
+        20,
+        400,
+        516
+      ],
+      "color": "#b58b2a",
+      "flags": {}
+    },
+    {
+      "id": 7,
+      "title": "Upscaling",
+      "bounding": [
+        2740,
+        20,
+        400,
+        1690
+      ],
+      "color": "#8a5a2b",
+      "flags": {}
+    },
+    {
+      "id": 8,
+      "title": "Repair",
+      "bounding": [
+        3200,
+        20,
+        400,
+        494
+      ],
+      "color": "#7a3030",
+      "flags": {}
+    },
+    {
+      "id": 9,
+      "title": "Image to pano",
+      "bounding": [
+        3660,
+        20,
+        400,
+        982
+      ],
+      "color": "#2f6b6b",
+      "flags": {}
+    }
+  ],
+  "config": {},
+  "extra": {
+    "ds": {
+      "scale": 0.5,
+      "offset": [
+        100,
+        100
+      ]
+    }
+  },
+  "version": 0.4
+}

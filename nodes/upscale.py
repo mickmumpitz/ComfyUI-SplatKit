@@ -817,7 +817,7 @@ class SphereSfMDatasetDualRes:
             init_min_tri_angle=4.0, init_min_num_inliers=30, init_max_forward_motion=1.0,
             image_order="camera_major", hires_glob="*.png"):
         import torch
-        from . import spheresfm_colmap as ss
+        from ..core import spheresfm_colmap as ss
 
         hires_dir = (hires_dir or "").strip().strip('"')
         if not hires_dir or not os.path.isdir(hires_dir):

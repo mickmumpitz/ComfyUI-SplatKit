@@ -51,9 +51,9 @@ import torch
 
 import comfy.model_management
 
-from . import spheresfm_colmap as sfm
-from .tools import colmap_read_model as crm
-from .tools.colmap_write_model import write_cameras_binary, write_images_binary
+from ..core import spheresfm_colmap as sfm
+from ..tools import colmap_read_model as crm
+from ..tools.colmap_write_model import write_cameras_binary, write_images_binary
 
 crm.CAMERA_MODELS.setdefault(11, ("SPHERE", 3))     # SphereSfM's fork-specific model
 
@@ -477,7 +477,7 @@ class AddHiResViewsToDataset:
                                "mode=colmap_now).")
         # Same name-or-path resolution as the SphereSfM add node, so a bare dataset name
         # resolves under ComfyUI/output instead of against the process CWD.
-        from .nodes import _resolve_existing_dataset
+        from .common import _resolve_existing_dataset
         dataset_dir = _resolve_existing_dataset(dataset_dir)
         with open(cameras_json, "r", encoding="utf-8") as f:
             meta = json.load(f)

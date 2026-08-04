@@ -30,7 +30,8 @@ import cv2
 import numpy as np
 import torch
 
-_REPO_DIR = os.path.dirname(os.path.abspath(__file__))
+_CORE_DIR = os.path.dirname(os.path.abspath(__file__))
+_REPO_DIR = os.path.dirname(_CORE_DIR)               # core/ -> pack root
 _VENDORED_DIR = os.path.join(_REPO_DIR, "vendored")  # standalone MoGe + utils_3dscene
 _MOGE_HF_REPO = "Ruicheng/moge-vitl"   # auto-downloaded on first use (model.pt, ~1.2GB)
 _INFER_MOD = None          # cached infer_panorama module
@@ -220,6 +221,12 @@ def setup_paths(matrix3d_root=None):
     # Install the nvdiffrast replacement before any vendored import touches it.
     if _REPO_DIR not in sys.path:
         sys.path.insert(0, _REPO_DIR)
+    # ...and core/ itself, so the vendored tree (loaded by path, not as a subpackage,
+    # so it has no relative route into this package) can reach the engine modules by
+    # bare name -- pipeline_utils_3dscene does `from gpu_lsmr import solve_lsmr`.
+    # Safe to expose: every module in core/ has a globally distinctive name.
+    if _CORE_DIR not in sys.path:
+        sys.path.insert(0, _CORE_DIR)
     import shim
     shim.install()
     _check_runtime_deps()
