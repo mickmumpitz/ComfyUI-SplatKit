@@ -582,13 +582,289 @@ class LoadDatasetImagesOrdered:
         return (images, json.dumps(names), canonical, json.dumps(groups), batch)
 
 
+# ---------------------------------------------------------------------------
+# Streaming saver -- writes upscaled frames to disk ONE CHUNK AT A TIME so a
+# per-frame VHS Meta-Batch loop never has to hold the whole 8K video in RAM.
+# ---------------------------------------------------------------------------
+# Cross-iteration accumulator state, keyed by this node's unique_id. Each entry:
+#   {"dir": <target>, "written": <int>, "total": <int|None>}. Populated on the
+# first meta-batch iteration and popped on the last so re-runs start clean.
+_STREAM_STATE = {}
+
+
+class SaveUpscaledFramesStreaming:
+    """Write an upscaled IMAGE batch to a folder, chunk by chunk, for meta-batch loops.
+
+    WHY THIS EXISTS: the panorama upscale rail (RealESRGAN -> 8K scale -> SD tile
+    refine) blows up RAM if you push all N equirect frames through it as one video
+    batch -- an 81-frame 8192x4096 float32 batch is ~32 GB *per node copy*, and the
+    CAS pre-sharpen alone stacks it 5x (163 GB -> MemoryError). The fix is to drive
+    the graph with a VHS **Meta Batch Manager** (frames_per_batch=1) so only ONE
+    frame is ever in flight, and to have this terminal node ACCUMULATE the per-frame
+    outputs onto disk instead of returning a giant batch.
+
+    Unlike ``Save Upscaled Dataset`` this node:
+      * writes to a SEPARATE folder (default ``<canonical>_upscaled``) and NEVER
+        renames or touches the pristine originals -- nothing to lose if it crashes;
+      * writes sequential filenames (``00000.png`` ...) preserving temporal order,
+        which is all the downstream SphereSfM step needs (it re-derives the COLMAP
+        dataset from scratch, so original filenames don't need to be matched);
+      * is idempotent: the first iteration of each run clears the target folder, so
+        a re-run overwrites cleanly rather than appending a second copy.
+
+    LOOP DRIVER: VideoHelperSuite only recognises ``VHS_VideoCombine`` as the node
+    that keeps a meta-batch loop requeueing (see its requeue_workflow guard), so a
+    throwaway VHS_VideoCombine (save_output=false, fed the cheap low-res frames) must
+    also sit on the Meta Batch Manager to advance the loop. This node just rides
+    along, writing each chunk as it arrives and finalising on the last one.
+
+    Works WITHOUT a meta_batch too: called once with a full batch it clears the
+    folder and writes every frame in a single shot.
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "images": ("IMAGE", {"tooltip": "The upscaled frame(s) for THIS chunk. "
+                                      "Under a Meta Batch Manager this is one (or a few) "
+                                      "frames per iteration."}),
+            },
+            "optional": {
+                "canonical_dir": ("STRING", {"default": "",
+                    "tooltip": "Wire Resolve Dataset Images -> canonical_dir. Frames are "
+                               "written to <canonical_dir><out_suffix> (a NEW folder next "
+                               "to the originals). Ignored if out_dir is set."}),
+                "out_suffix": ("STRING", {"default": "_upscaled",
+                    "tooltip": "Suffix for the derived output folder when out_dir is blank."}),
+                "out_dir": ("STRING", {"default": "",
+                    "tooltip": "Explicit output folder. Overrides canonical_dir+out_suffix. "
+                               "Absolute, or relative to ComfyUI/output."}),
+                "filename_pattern": ("STRING", {"default": "{i:05d}.png",
+                    "tooltip": "Python format for each frame's filename; {i} is the running "
+                               "0-based frame index. Sequential naming keeps temporal order."}),
+                "meta_batch": ("VHS_BatchManager", {
+                    "tooltip": "Wire the SAME Meta Batch Manager that drives the loader here "
+                               "so this node accumulates across iterations and finalises on "
+                               "the last chunk. Leave unconnected for a single full-batch save."}),
+            },
+            "hidden": {"unique_id": "UNIQUE_ID", "prompt": "PROMPT"},
+        }
+
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("images_dir",)
+    FUNCTION = "save"
+    OUTPUT_NODE = True
+    CATEGORY = "SplatKit"
+
+    def _resolve_target(self, canonical_dir, out_suffix, out_dir):
+        out_dir = (out_dir or "").strip().strip('"')
+        if out_dir:
+            target = out_dir if os.path.isabs(out_dir) else os.path.join(_output_root(), out_dir)
+        else:
+            canonical = (canonical_dir or "").strip().strip('"')
+            if not canonical:
+                raise RuntimeError("[SaveUpscaledFramesStreaming] set out_dir, or wire "
+                                   "canonical_dir (from Resolve Dataset Images).")
+            target = os.path.normpath(os.path.abspath(canonical)) + out_suffix
+        return os.path.normpath(os.path.abspath(target))
+
+    def save(self, images, canonical_dir="", out_suffix="_upscaled", out_dir="",
+             filename_pattern="{i:05d}.png", meta_batch=None, unique_id=None, prompt=None):
+        import numpy as np
+        from PIL import Image
+
+        target = self._resolve_target(canonical_dir, out_suffix, out_dir)
+
+        # Guard: refuse to write into (and clear) the pristine originals folder.
+        canon = os.path.normpath(os.path.abspath((canonical_dir or "").strip().strip('"'))) \
+            if canonical_dir else None
+        if canon and target == canon:
+            raise RuntimeError(f"[SaveUpscaledFramesStreaming] refusing to write into the "
+                               f"originals folder {target}. Pick a different out_dir / "
+                               f"out_suffix so the originals are preserved.")
+
+        first = (meta_batch is None) or (unique_id not in _STREAM_STATE)
+        if first:
+            os.makedirs(target, exist_ok=True)
+            # Idempotent restart: clear ONLY existing image files (never subdirs).
+            removed = 0
+            for f in os.listdir(target):
+                if f.lower().endswith(_IMG_EXTS) and os.path.isfile(os.path.join(target, f)):
+                    os.remove(os.path.join(target, f))
+                    removed += 1
+            total = int(getattr(meta_batch, "total_frames", 0) or 0) if meta_batch is not None \
+                else int(images.shape[0])
+            if not total or total == float("inf"):
+                total = None
+            _STREAM_STATE[unique_id] = {"dir": target, "written": 0, "total": total}
+            print(f"[SaveUpscaledFramesStreaming] target={target}"
+                  f"{f'  (cleared {removed} old frame(s))' if removed else ''}"
+                  f"{f'  expecting {total} frame(s)' if total else ''}"
+                  f"{'  [meta-batch streaming]' if meta_batch is not None else '  [single batch]'}")
+
+        st = _STREAM_STATE[unique_id]
+        target = st["dir"]
+
+        is_torch = hasattr(images, "detach")
+        n = int(images.shape[0])
+        for i in range(n):
+            if is_torch:
+                frame = images[i].detach().cpu().float().numpy()
+            else:
+                frame = np.asarray(images[i], dtype=np.float32)
+            frame = np.clip(frame * 255.0, 0, 255).astype(np.uint8)
+            if frame.ndim == 3 and frame.shape[-1] == 1:
+                frame = frame[..., 0]
+            fname = filename_pattern.format(i=st["written"] + i)
+            out_path = os.path.join(target, fname)
+            img = Image.fromarray(frame)
+            ext = os.path.splitext(fname)[1].lower()
+            if ext in (".jpg", ".jpeg"):
+                img.convert("RGB").save(out_path, quality=95)
+            else:
+                img.save(out_path)
+        st["written"] += n
+
+        tot = st["total"]
+        print(f"[SaveUpscaledFramesStreaming] wrote {n} frame(s) "
+              f"-> {st['written']}{('/' + str(tot)) if tot else ''} in {target}")
+
+        last = (meta_batch is None) or bool(getattr(meta_batch, "has_closed_inputs", False))
+        if last:
+            print(f"[SaveUpscaledFramesStreaming] DONE: {st['written']} upscaled frame(s) "
+                  f"saved to {target}\n"
+                  f"  Next: run the SfM-from-upscaled workflow pointing a loader at this "
+                  f"folder -> SphereSfM Dataset (mode=colmap_now).")
+            _STREAM_STATE.pop(unique_id, None)
+        return (target,)
+
+
+class SphereSfMDatasetDualRes:
+    """Build a SphereSfM COLMAP dataset with SfM at LOW resolution and the trainable
+    pinhole cube faces reprojected from HIGH-resolution equirects read off disk.
+
+    WHY: posing the scene (feature extraction + matching + mapping) does not need 8K --
+    SPHERE poses are angular, so they're resolution-independent. Doing SfM on the small
+    equirects makes EXHAUSTIVE matching (what links non-adjacent trajectories into ONE
+    model) cheap, while the 8K panoramas are spent only where they matter: the pinhole
+    faces LichtFeld actually trains on. The low-res model's SPHERE camera is rescaled to
+    the 8K grid before reprojection samples the sharp source.
+
+    INPUTS
+      * pano_frames_1..4 (IMAGE) -- the LOW-RES equirect trajectories (e.g. the raw
+        1440x720 panoramas/). Concatenated in order; ~4 GB for 324 frames, so unlike the
+        8K set this DOES fit in a ComfyUI tensor.
+      * hires_dir (STRING) -- folder of the matching 8K equirects (panoramas_upscaled/).
+        Read frame-by-frame from disk (never tensored -> no 122 GB OOM). Its sorted file
+        order MUST line up 1:1 with the concatenated low-res frames (same source order).
+
+    on_split=stop (default): if the mapper yields more than one disconnected model the node
+    RAISES with the per-model frame breakdown and reprojects nothing -- so you can see the
+    trajectories didn't fuse rather than silently training on just the biggest one.
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "pano_frames_1": ("IMAGE", {"tooltip": "Low-res equirect trajectory 1 (for SfM)."}),
+                "hires_dir": ("STRING", {"default": "",
+                    "tooltip": "Folder of matching 8K equirects (e.g. <dataset>/panoramas_upscaled). "
+                               "Sorted order must match the low-res frame order 1:1."}),
+                "output_name": ("STRING", {"default": "my_scene",
+                    "tooltip": "Dataset folder under ComfyUI/output (or an absolute path)."}),
+            },
+            "optional": {
+                "pano_frames_2": ("IMAGE", {"tooltip": "Optional low-res trajectory 2."}),
+                "pano_frames_3": ("IMAGE", {"tooltip": "Optional low-res trajectory 3."}),
+                "pano_frames_4": ("IMAGE", {"tooltip": "Optional low-res trajectory 4."}),
+                "matcher_type": (["exhaustive", "sequential"], {"default": "exhaustive",
+                    "tooltip": "exhaustive matches ALL pairs (links non-adjacent trajectories); "
+                               "sequential only matches temporally adjacent frames."}),
+                "on_split": (["stop", "largest"], {"default": "stop",
+                    "tooltip": "stop = raise with the per-model breakdown if >1 model forms; "
+                               "largest = reproject the biggest model anyway (legacy behaviour)."}),
+                "face_size": ("INT", {"default": 0, "min": 0, "max": 8192,
+                    "tooltip": "Output cube-face size in px; 0 = COLMAP default (scaled from the "
+                               "rescaled 8K SPHERE camera -> full detail)."}),
+                "max_num_features": ("INT", {"default": 8192, "min": 512, "max": 65536}),
+                "peak_threshold": ("FLOAT", {"default": 0.0066, "min": 0.0, "max": 1.0, "step": 0.0001}),
+                "edge_threshold": ("FLOAT", {"default": 10.0, "min": 1.0, "max": 100.0}),
+                "max_num_matches": ("INT", {"default": 32768, "min": 1024, "max": 262144}),
+                "filter_max_reproj_error": ("FLOAT", {"default": 4.0, "min": 0.5, "max": 32.0}),
+                "filter_min_tri_angle": ("FLOAT", {"default": 1.5, "min": 0.1, "max": 30.0}),
+                "init_min_tri_angle": ("FLOAT", {"default": 4.0, "min": 0.5, "max": 30.0}),
+                "init_min_num_inliers": ("INT", {"default": 30, "min": 10, "max": 500}),
+                "init_max_forward_motion": ("FLOAT", {"default": 1.0, "min": 0.1, "max": 1.0, "step": 0.05}),
+                "image_order": (["camera_major", "frame_major"], {"default": "camera_major"}),
+                "hires_glob": ("STRING", {"default": "*.png",
+                    "tooltip": "Glob for the hi-res files inside hires_dir."}),
+            },
+        }
+
+    RETURN_TYPES = ("STRING", "INT", "INT")
+    RETURN_NAMES = ("model_dir", "num_images", "num_points")
+    FUNCTION = "run"
+    OUTPUT_NODE = True       # terminal: writes the COLMAP dataset to disk
+    CATEGORY = "SplatKit"
+
+    def run(self, pano_frames_1, hires_dir="", output_name="my_scene",
+            pano_frames_2=None, pano_frames_3=None, pano_frames_4=None,
+            matcher_type="exhaustive", on_split="stop", face_size=0,
+            max_num_features=8192, peak_threshold=0.0066, edge_threshold=10.0,
+            max_num_matches=32768, filter_max_reproj_error=4.0, filter_min_tri_angle=1.5,
+            init_min_tri_angle=4.0, init_min_num_inliers=30, init_max_forward_motion=1.0,
+            image_order="camera_major", hires_glob="*.png"):
+        import torch
+        from . import spheresfm_colmap as ss
+
+        hires_dir = (hires_dir or "").strip().strip('"')
+        if not hires_dir or not os.path.isdir(hires_dir):
+            raise RuntimeError(f"[DualResSfM] hires_dir not found: {hires_dir!r} -- point it at "
+                               "the 8K equirect folder (e.g. <dataset>/panoramas_upscaled).")
+
+        batches = [b for b in (pano_frames_1, pano_frames_2, pano_frames_3, pano_frames_4)
+                   if b is not None]
+        trajectory_lengths = [int(b.shape[0]) for b in batches]
+        lowres = torch.cat(batches, dim=0) if len(batches) > 1 else batches[0]
+
+        out_dir = output_name.strip().strip('"')
+        if not os.path.isabs(out_dir):
+            out_dir = os.path.join(_output_root(), out_dir)
+        out_dir = os.path.normpath(out_dir)
+        work_dir = os.path.join(out_dir, "_spheresfm_work")
+
+        res = ss.run_spheresfm_dualres(
+            lowres, hires_dir, out_dir=out_dir, work_dir=work_dir,
+            matcher_type=matcher_type, face_size=int(face_size),
+            max_num_features=int(max_num_features), peak_threshold=float(peak_threshold),
+            edge_threshold=float(edge_threshold), max_num_matches=int(max_num_matches),
+            filter_max_reproj_error=float(filter_max_reproj_error),
+            filter_min_tri_angle=float(filter_min_tri_angle),
+            init_min_tri_angle=float(init_min_tri_angle),
+            init_min_num_inliers=int(init_min_num_inliers),
+            init_max_forward_motion=float(init_max_forward_motion),
+            image_order=image_order, trajectory_lengths=trajectory_lengths,
+            on_split=on_split, hires_glob=hires_glob)
+        print(f"[DualResSfM] {res['num_frames']} frames -> {res['num_images']} pinhole faces, "
+              f"{res['num_points']} points ({res['num_models']} model(s)) -> {res['model_dir']}\n"
+              f"  Train (pinhole, NO --gut): LichtFeld-Studio.exe -d \"{res['sparse_dir']}/..\" "
+              f"-o <out> --headless --train --strategy mcmc --max-cap 2000000 --sh-degree 2")
+        return (res["model_dir"], res["num_images"], res["num_points"])
+
+
 NODE_CLASS_MAPPINGS = {
     "SplatKit_ResolveDatasetImages": ResolveDatasetImages,
     "SplatKit_LoadDatasetImagesOrdered": LoadDatasetImagesOrdered,
     "SplatKit_SaveUpscaledDataset": SaveUpscaledDataset,
+    "SplatKit_SaveUpscaledFramesStreaming": SaveUpscaledFramesStreaming,
+    "SplatKit_SphereSfMDatasetDualRes": SphereSfMDatasetDualRes,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
     "SplatKit_ResolveDatasetImages": "Resolve Dataset Images",
     "SplatKit_LoadDatasetImagesOrdered": "Load Dataset Images (Ordered)",
     "SplatKit_SaveUpscaledDataset": "Save Upscaled Dataset",
+    "SplatKit_SaveUpscaledFramesStreaming": "Save Upscaled Frames (Streaming)",
+    "SplatKit_SphereSfMDatasetDualRes": "SphereSfM Dataset (Dual-Res: low-res SfM + 8K faces)",
 }
