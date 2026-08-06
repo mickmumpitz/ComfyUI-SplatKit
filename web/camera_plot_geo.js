@@ -21,7 +21,17 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 
-const NODE_NAME = "SplatKit_CameraPlotRenderControlGeo";
+// Both Camera Plot fly-through nodes share this editor verbatim: they expose the same
+// `anchors` / `orientation` / `length` / `point_budget` widgets in the same coordinate
+// frame, and differ only in what the RENDER produces (equirect vs a pinhole lens). The
+// perspective one additionally carries focal_mm / sensor_width_mm / width / height, which
+// the editor picks up to draw the real framing wedge (see _lens / the FOV overlay below);
+// on the equirect node those widgets are absent and the overlay simply never draws.
+const NODE_NAMES = [
+  "SplatKit_CameraPlotRenderControlGeo",
+  "SplatKit_CameraPlotFlythroughPersp",
+];
+const isCamPlotNode = (t) => NODE_NAMES.includes(t);
 const DEFAULT_ANCHORS = "0, 0, 0\n0.6, 0.1, 1.5\n-0.4, 0.2, 3.0\n0.3, 0.0, 4.5";
 const WIDGET_HEIGHT = 320;     // default editor height (px)
 const HIT_RADIUS = 14;         // anchor handle hit radius (css px)
@@ -171,6 +181,19 @@ function headings(positions, mode, target) {
 function sub(a, b) { return [a[0] - b[0], a[1] - b[1], a[2] - b[2]]; }
 function scale(a, s) { return [a[0] * s, a[1] * s, a[2] * s]; }
 
+// Rotate unit vector v about unit axis a by `deg` (Rodrigues). Builds the field-of-view
+// edge rays from a per-frame heading; mirrors _rodrigues in camera_plot_persp.py.
+function rotAxis(v, a, deg) {
+  const t = (deg * Math.PI) / 180, c = Math.cos(t), s = Math.sin(t);
+  const cr = [a[1] * v[2] - a[2] * v[1],
+              a[2] * v[0] - a[0] * v[2],
+              a[0] * v[1] - a[1] * v[0]];
+  const d = a[0] * v[0] + a[1] * v[1] + a[2] * v[2];
+  return [v[0] * c + cr[0] * s + a[0] * d * (1 - c),
+          v[1] * c + cr[1] * s + a[1] * d * (1 - c),
+          v[2] * c + cr[2] * s + a[2] * d * (1 - c)];
+}
+
 // ---------------------------------------------------------------------------
 // The editor -- owns state and draws into a DOM <canvas> added via addDOMWidget.
 // ---------------------------------------------------------------------------
@@ -198,6 +221,9 @@ class CamPlotGeoEditor {
     this.orientW = node.widgets?.find((w) => w.name === "orientation");
     this.lengthW = node.widgets?.find((w) => w.name === "length");
     this.targetW = node.widgets?.find((w) => w.name === "look_at_target");
+    // Lens widgets -- only the Perspective node has them (see NODE_NAMES).
+    this.lensW = ["focal_mm", "sensor_width_mm", "width", "height"].map(
+      (n) => node.widgets?.find((w) => w.name === n));
 
     this._buildCanvas();
     this._loadFromWidget();
@@ -367,6 +393,25 @@ class CamPlotGeoEditor {
   // --- per-anchor look targets ----------------------------------------------
   _isPerPoint() { return this.orientW?.value === "per_point_look"; }
 
+  // --- lens ------------------------------------------------------------------
+  // Horizontal / vertical FOV from the lens widgets, or null when this node has none
+  // (the equirect Camera Plot sees everything, so there is no wedge to draw). Mirrors
+  // _lens() in nodes/camera_plot_persp.py exactly: fx = width * focal / sensor_width
+  // with square pixels, so the vertical FOV follows from the output aspect ratio.
+  _lens() {
+    const [fW, sW, wW, hW] = this.lensW || [];
+    const f = Number(fW?.value), sw = Number(sW?.value);
+    const w = Number(wW?.value), h = Number(hW?.value);
+    if (!(f > 0 && sw > 0 && w > 0 && h > 0)) return null;
+    const fx = (w * f) / sw;
+    const deg = (r) => (r * 180) / Math.PI;
+    return {
+      hfov: deg(2 * Math.atan((0.5 * w) / fx)),
+      vfov: deg(2 * Math.atan((0.5 * h) / fx)),
+      equiv35: (f * 36) / sw,
+    };
+  }
+
   // Ensure every anchor has a look target (default: aim at the next anchor; the last
   // extends its incoming direction). Mirrors _camplot_fill_targets in nodes.py.
   _ensureTargets() {
@@ -423,6 +468,16 @@ class CamPlotGeoEditor {
       const prev = this.lengthW.callback;
       this.lengthW.callback = (...args) => {
         const r = prev ? prev.apply(this.lengthW, args) : undefined;
+        this.render();
+        return r;
+      };
+    }
+    // Redraw the framing wedge live while the focal length / format is being dialled in.
+    for (const w of this.lensW || []) {
+      if (!w) continue;
+      const prev = w.callback;
+      w.callback = (...args) => {
+        const r = prev ? prev.apply(w, args) : undefined;
         this.render();
         return r;
       };
@@ -647,6 +702,55 @@ class CamPlotGeoEditor {
       }
     }
 
+    // Framing wedge -- the ACTUAL field of view of the configured lens, at the start,
+    // middle and end of the path. Drawn behind the path so anchors stay grabbable. The
+    // FLOOR panel shows the horizontal FOV (heading rotated about world up), the SIDE
+    // panel the vertical FOV (rotated about the camera's right axis, which
+    // _camplot_c2w_stack always builds horizontal). Edge rays are computed in 3D and
+    // then projected into the panel, so an out-of-plane heading foreshortens honestly
+    // rather than faking the angle.
+    const lens = this._lens();
+    if (lens && positions.length) {
+      const horiz = ai === 0 && bi === 2;
+      const fov = horiz ? lens.hfov : lens.vfov;
+      const L = 0.42 * Math.min(rect.w, rect.h);
+      const nW = Math.min(3, positions.length);
+      for (let a = 0; a < nW; a++) {
+        const idx = nW <= 1 ? 0 : Math.round((a * (positions.length - 1)) / (nW - 1));
+        const f = head[idx];
+        // Camera basis, exactly as _camplot_c2w_stack builds it: right = worldUp x fwd
+        // (always horizontal), up = fwd x right. Horizontal FOV edges rotate about the
+        // camera's OWN up axis -- using world up would narrow the wedge on a tilted shot.
+        const rr = [f[2], 0, -f[0]];                  // cross([0,1,0], f)
+        const rn = Math.hypot(rr[0], rr[2]);
+        const right = rn > 1e-6 ? [rr[0] / rn, 0, rr[2] / rn] : [1, 0, 0];
+        const axis = horiz
+          ? [f[1] * right[2],
+             f[2] * right[0] - f[0] * right[2],
+             -f[1] * right[0]]                        // cross(f, right), right[1] === 0
+          : right;
+        const [bx, by] = fit.toS(positions[idx][ai], positions[idx][bi]);
+        const seg = (e) => {
+          const dx = e[ai], dy = e[bi];
+          const n = Math.hypot(dx, dy);
+          return n < 1e-6 ? null : [bx + (dx / n) * L, by - (dy / n) * L];
+        };
+        const p0 = seg(rotAxis(f, axis, fov / 2));
+        const p1 = seg(rotAxis(f, axis, -fov / 2));
+        if (!p0 || !p1) continue;
+        ctx.beginPath();
+        ctx.moveTo(bx, by);
+        ctx.lineTo(p0[0], p0[1]);
+        ctx.lineTo(p1[0], p1[1]);
+        ctx.closePath();
+        ctx.fillStyle = "rgba(255,179,0,0.10)";
+        ctx.fill();
+        ctx.strokeStyle = "rgba(255,179,0,0.40)";
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      }
+    }
+
     // Camera path (the LIVE Catmull-Rom curve).
     ctx.strokeStyle = "#22aa77";
     ctx.lineWidth = 2;
@@ -737,10 +841,15 @@ class CamPlotGeoEditor {
       ctx.fillText(String(i), hx + 8, hy - 6);
     }
 
-    // Title.
+    // Title (+ the FOV this panel's wedge is showing, when there is a lens).
     ctx.fillStyle = "rgba(220,220,220,0.85)";
     ctx.font = "11px monospace";
     ctx.fillText(title, rect.x + 6, rect.y + 14);
+    if (lens) {
+      ctx.fillStyle = "rgba(255,179,0,0.85)";
+      ctx.fillText(`${(ai === 0 && bi === 2 ? lens.hfov : lens.vfov).toFixed(1)}°`,
+                   rect.x + 6, rect.y + 27);
+    }
 
     ctx.restore();
 
@@ -1051,7 +1160,7 @@ class CamPlotGeoEditor {
 // ---------------------------------------------------------------------------
 async function suggestForSelected(node) {
   const sel = Object.values(app.canvas?.selected_nodes || {});
-  let nodes = sel.filter((n) => n.type === NODE_NAME);
+  let nodes = sel.filter((n) => isCamPlotNode(n.type));
   if (!nodes.includes(node)) nodes.push(node);   // the clicked node always partakes
   // Stable left-to-right, top-to-bottom assignment so re-running is predictable.
   nodes.sort((a, b) => (a.pos[0] - b.pos[0]) || (a.pos[1] - b.pos[1]));
@@ -1100,7 +1209,7 @@ app.registerExtension({
   name: "SplatKit.CameraPlotGeo",
 
   async beforeRegisterNodeDef(nodeType, nodeData, app) {
-    if (nodeData?.name !== NODE_NAME) return;
+    if (!isCamPlotNode(nodeData?.name)) return;
 
     const onCreated = nodeType.prototype.onNodeCreated;
     nodeType.prototype.onNodeCreated = function () {

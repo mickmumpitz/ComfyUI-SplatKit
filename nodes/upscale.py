@@ -499,26 +499,131 @@ class LoadDatasetImagesOrdered:
                     "tooltip": "-1 = load all cameras. 0..N-1 = load only that camera's "
                                "sub-video (one coherent view/trajectory). The console "
                                "lists the available cameras on each run."}),
+                "meta_batch": ("VHS_BatchManager", {
+                    "tooltip": "Optional VHS Meta Batch Manager. When wired, the camera-major "
+                               "sequence is STREAMED frames_per_batch frames at a time instead "
+                               "of loaded whole -- the fix for 'the upscaled result does not fit "
+                               "in RAM'. Set frames_per_batch to a divisor of the per-view length "
+                               "(81 -> 81, 27, 9, 3, 1) so no chunk straddles a view boundary. "
+                               "The order_names / canonical_dir outputs stay whole-dataset."}),
+                "on_size_mismatch": (["error", "resize_and_passthrough"], {"default": "error",
+                    "tooltip": "What to do when the folder holds more than one image size.\n"
+                               "error: refuse (a batch needs one size).\n"
+                               "resize_and_passthrough: resize the odd images DOWN to the "
+                               "majority size so they still give the temporal model its "
+                               "context, and list them on the passthrough_json output. Frame "
+                               "00000 is normally the ORIGINAL panorama (a separate, larger "
+                               "COLMAP camera) -- wire passthrough_json into Save Upscaled "
+                               "Frames (Streaming) and its untouched original is copied to "
+                               "the output instead of the generated upscale."}),
             },
+            "hidden": {"unique_id": "UNIQUE_ID"},
         }
 
-    RETURN_TYPES = ("IMAGE", "STRING", "STRING", "STRING", "INT")
+    RETURN_TYPES = ("IMAGE", "STRING", "STRING", "STRING", "INT", "STRING")
     RETURN_NAMES = ("images", "order_names", "canonical_dir", "group_sizes",
-                    "suggested_batch_size")
+                    "suggested_batch_size", "passthrough_json")
     FUNCTION = "load"
     CATEGORY = "SplatKit"
 
+    def _probe_sizes(self, load_dir, names, on_size_mismatch):
+        """Read every header up front -> (target_size, [names to resize]).
+
+        Cheap (``Image.open`` is lazy, so this touches headers, not pixels) and worth it:
+        a mixed-resolution set is discovered in seconds instead of failing half way
+        through a multi-hour run.
+        """
+        from PIL import Image, ImageOps
+
+        sizes = {}
+        for n in names:
+            im = ImageOps.exif_transpose(Image.open(os.path.join(load_dir, n)))
+            sizes.setdefault(im.size, []).append(n)
+        majority = max(sizes, key=lambda s: len(sizes[s]))
+        if len(sizes) == 1:
+            return majority, []
+
+        detail = []
+        for size, files in sizes.items():
+            if size == majority:
+                continue
+            shown = ", ".join(files[:10]) + (" ..." if len(files) > 10 else "")
+            detail.append(f"  {size[0]}x{size[1]} ({len(files)} images): {shown}")
+        odd = [n for s, fs in sizes.items() if s != majority for n in fs]
+        head = (f"[LoadDatasetImagesOrdered] images in {load_dir} have mixed resolutions. "
+                f"Majority is {majority[0]}x{majority[1]} ({len(sizes[majority])} images). "
+                f"Deviating files:")
+        if on_size_mismatch == "error":
+            raise RuntimeError("\n".join(
+                [head] + detail +
+                ["  Set on_size_mismatch=resize_and_passthrough to resize these to the "
+                 "majority size and copy their untouched originals to the output."]))
+        # Keep the deviating names in the loaded order so the log reads sensibly.
+        order = {n: i for i, n in enumerate(names)}
+        odd.sort(key=lambda n: order.get(n, 0))
+        print("\n".join([head] + detail +
+                        [f"  -> resizing {len(odd)} image(s) to "
+                         f"{majority[0]}x{majority[1]} for batching; their ORIGINALS will be "
+                         f"passed through to the output untouched (if passthrough_json is "
+                         f"wired to the saver)."]))
+        return majority, odd
+
+    def _stream(self, load_dir, names, size, resize_set, meta_batch, unique_id):
+        """Generator mirroring VideoHelperSuite's ``images_generator`` contract.
+
+        Yields (width, height), then the total frame count, then one HWC float32 frame
+        at a time. The one-frame lookahead is deliberate and load-bearing: it lets us
+        set ``has_closed_inputs`` BEFORE handing over the final frame, which is how the
+        meta-batch loop (and the streaming saver's 'last chunk' detection) knows to stop.
+        """
+        import numpy as np
+        from PIL import Image, ImageOps
+
+        w, h = size
+        yield (w, h)
+        yield len(names)
+
+        def _read(n):
+            im = ImageOps.exif_transpose(Image.open(os.path.join(load_dir, n)))
+            if n in resize_set and im.size != (w, h):
+                im = im.resize((w, h), Image.LANCZOS)
+            return np.asarray(im.convert("RGB"), dtype=np.float32) / 255.0
+
+        it = map(_read, names)
+        prev = None
+        try:
+            prev = next(it)
+            while True:
+                nxt = next(it)
+                yield prev
+                prev = nxt
+        except StopIteration:
+            pass
+        if meta_batch is not None:
+            meta_batch.inputs.pop(unique_id, None)
+            meta_batch.has_closed_inputs = True
+        if prev is not None:
+            yield prev
+
     def load(self, dataset_name="", dataset_path="", lowres_suffix="_lowres",
-             camera_index=-1):
+             camera_index=-1, meta_batch=None, on_size_mismatch="error", unique_id=None):
+        import itertools
         import numpy as np
         import torch
         import cv2
+        from PIL import Image
 
         canonical = _find_canonical_images_dir(dataset_name, dataset_path, lowres_suffix)
         if canonical is None:
             raise RuntimeError(
                 "[LoadDatasetImagesOrdered] could not locate an images folder for "
                 f"dataset_name={dataset_name!r} dataset_path={dataset_path!r}.")
+        # Pointed straight at an already-swapped originals folder (e.g. Prepare Dataset
+        # Upscale -> load_dir): the CANONICAL name is the one without the suffix.
+        if lowres_suffix and canonical.endswith(lowres_suffix):
+            base = canonical[:-len(lowres_suffix)]
+            if os.path.isdir(base):
+                canonical = base
         low = canonical + lowres_suffix
         load_dir = low if os.path.isdir(low) else canonical
 
@@ -548,38 +653,160 @@ class LoadDatasetImagesOrdered:
             print(f"[LoadDatasetImagesOrdered] loading ONLY camera_index={camera_index}: "
                   f"{len(names)} frames ({names[0]} .. {names[-1]})")
 
+        suggested = _suggest_batch_size(groups)
+
+        # ---- streaming path: hand the loop ONE chunk per iteration -------------
+        if meta_batch is not None:
+            if unique_id not in meta_batch.inputs:
+                size, odd = self._probe_sizes(load_dir, names, on_size_mismatch)
+                gen = self._stream(load_dir, names, size, set(odd), meta_batch, unique_id)
+                w, h = next(gen)
+                meta_batch.inputs[unique_id] = (gen, w, h, odd)
+                meta_batch.total_frames = min(meta_batch.total_frames, next(gen))
+                fpb = meta_batch.frames_per_batch
+                straddles = [i for i, g in enumerate(groups) if g % fpb]
+                print(f"[LoadDatasetImagesOrdered] STREAMING {len(names)} images "
+                      f"camera-major from {load_dir}\n"
+                      f"                           {len(groups)} sub-video group(s), "
+                      f"sizes={groups[:8]}{' ...' if len(groups) > 8 else ''}, "
+                      f"frames_per_batch={fpb} ({w}x{h})")
+                if straddles:
+                    print(f"[LoadDatasetImagesOrdered] WARNING: frames_per_batch={fpb} does "
+                          f"not divide group size(s) {sorted({groups[i] for i in straddles})} "
+                          f"-- some chunks will straddle a view boundary and SeedVR2 will see "
+                          f"two different view directions in one temporal window. Use a "
+                          f"divisor of the group size instead.")
+            gen, w, h, odd = meta_batch.inputs[unique_id]
+            chunk = itertools.islice(gen, meta_batch.frames_per_batch)
+            images = torch.from_numpy(
+                np.fromiter(chunk, np.dtype((np.float32, (h, w, 3)))))
+            if len(images) == 0:
+                raise RuntimeError("[LoadDatasetImagesOrdered] the meta-batch stream is "
+                                   f"exhausted but was polled again ({load_dir}).")
+            return (images, json.dumps(names), canonical, json.dumps(groups), suggested,
+                    json.dumps({"dir": load_dir, "names": odd}))
+
+        # ---- whole-dataset path (no meta_batch) --------------------------------
+        (w, h), odd = self._probe_sizes(load_dir, names, on_size_mismatch)
+        odd_set = set(odd)
         arrs = []
-        shapes = {}                                # shape -> list of filenames
         for n in names:
             bgr = cv2.imread(os.path.join(load_dir, n), cv2.IMREAD_COLOR)
             if bgr is None:
                 raise RuntimeError(f"[LoadDatasetImagesOrdered] failed to read {n}")
-            shapes.setdefault(bgr.shape, []).append(n)
+            if n in odd_set and (bgr.shape[1], bgr.shape[0]) != (w, h):
+                bgr = cv2.resize(bgr, (w, h), interpolation=cv2.INTER_LANCZOS4)
             arrs.append(bgr[..., ::-1])            # BGR -> RGB
-        if len(shapes) > 1:
-            majority = max(shapes, key=lambda s: len(shapes[s]))
-            lines = [f"[LoadDatasetImagesOrdered] images in {load_dir} have mixed "
-                     f"resolutions and cannot be batched. Majority shape is "
-                     f"{majority[1]}x{majority[0]} ({len(shapes[majority])} images). "
-                     f"Deviating files:"]
-            for shape, files in shapes.items():
-                if shape == majority:
-                    continue
-                shown = ", ".join(files[:10]) + (" ..." if len(files) > 10 else "")
-                lines.append(f"  {shape[1]}x{shape[0]} ({len(files)} images): {shown}")
-            msg = "\n".join(lines)
-            print(msg)
-            raise RuntimeError(msg)
-        batch = np.stack(arrs).astype(np.float32) / 255.0
-        images = torch.from_numpy(batch)
+        images = torch.from_numpy(np.stack(arrs).astype(np.float32) / 255.0)
 
-        batch = _suggest_batch_size(groups)
         print(f"[LoadDatasetImagesOrdered] loaded {len(names)} images camera-major from "
               f"{load_dir}\n                           {len(groups)} sub-video group(s), "
               f"sizes={groups[:8]}{' ...' if len(groups) > 8 else ''}\n"
-              f"                           suggested SeedVR2 batch_size={batch} "
+              f"                           suggested SeedVR2 batch_size={suggested} "
               f"(aligns to view boundaries; drop to the next 4n+1 divisor if VRAM-limited)")
-        return (images, json.dumps(names), canonical, json.dumps(groups), batch)
+        return (images, json.dumps(names), canonical, json.dumps(groups), suggested,
+                json.dumps({"dir": load_dir, "names": odd}))
+
+
+class PrepareDatasetUpscale:
+    """Do the originals-preserving folder swap BEFORE a meta-batch upscale loop starts.
+
+    ``Save Upscaled Dataset`` performs the ``images -> images_lowres`` rename at the
+    END, once it holds the whole upscaled batch. That is impossible in a frame-by-frame
+    VHS Meta-Batch loop: the loader resolves its file paths once, on the first
+    iteration, and then opens them lazily one per iteration -- renaming the folder
+    underneath it mid-loop makes every later frame vanish.
+
+    So this node does the swap UP FRONT and hands the loop a stable pair of folders:
+
+      * ``load_dir``      -- ``<images>_lowres``, the pristine originals. The loader
+                             reads these and nothing ever writes to them.
+      * ``canonical_dir`` -- ``<images>``, recreated EMPTY, ready for the streaming
+                             saver to fill frame by frame under the ORIGINAL filenames
+                             (so COLMAP's sparse/0/images.bin keeps matching).
+
+    Idempotent: on a re-run ``_lowres`` already exists, so nothing is renamed -- the
+    originals are read from there again and ``images`` is simply refilled. If a run
+    crashes half way, ``images`` is left partially written but the originals are
+    untouched; just run it again.
+
+    Pair with ``Save Upscaled Frames (Streaming)``: wire ``canonical_dir`` -> its
+    ``out_dir`` and ``load_dir`` -> its ``source_names_dir``.
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "dataset_name": ("STRING", {"default": "my_scene",
+                    "tooltip": "Name of the dataset folder this pack created under "
+                               "ComfyUI/output (e.g. the SphereSfM output_name)."}),
+            },
+            "optional": {
+                "dataset_path": ("STRING", {"default": "",
+                    "tooltip": "Optional explicit path to the dataset root OR directly to "
+                               "an images folder. Overrides dataset_name when set."}),
+                "lowres_suffix": ("STRING", {"default": "_lowres",
+                    "tooltip": "Originals are moved to <images><suffix>. Must match the "
+                               "suffix used by the other upscale nodes."}),
+            },
+        }
+
+    RETURN_TYPES = ("STRING", "STRING", "INT")
+    RETURN_NAMES = ("load_dir", "canonical_dir", "frame_count")
+    FUNCTION = "prepare"
+    CATEGORY = "SplatKit"
+
+    @classmethod
+    def IS_CHANGED(cls, **kwargs):
+        # Always re-run: the node is idempotent but its side effect (the swap) must not
+        # be skipped by the execution cache when the folders were changed out of band.
+        return float("nan")
+
+    def prepare(self, dataset_name="", dataset_path="", lowres_suffix="_lowres"):
+        root = _find_dataset_root(dataset_name, dataset_path)
+        marker = _read_marker(root)
+        # The marker names the images subdir authoritatively; fall back to the layout
+        # probe for datasets that have none.
+        canonical = None
+        if root:
+            sub = marker.get("images_subdir") or ("panoramas"
+                                                  if marker.get("kind") == "panorama_pending"
+                                                  else None)
+            if sub:
+                cand = os.path.normpath(os.path.join(root, sub))
+                if os.path.isdir(cand) or os.path.isdir(cand + lowres_suffix):
+                    canonical = cand
+        if canonical is None:
+            canonical = _find_canonical_images_dir(dataset_name, dataset_path, lowres_suffix)
+        if canonical is None:
+            raise RuntimeError(
+                "[PrepareDatasetUpscale] could not locate an images folder for "
+                f"dataset_name={dataset_name!r} dataset_path={dataset_path!r}.")
+        canonical = os.path.normpath(os.path.abspath(canonical))
+        low = canonical + lowres_suffix
+
+        if not os.path.isdir(low):
+            if not os.path.isdir(canonical):
+                raise RuntimeError(f"[PrepareDatasetUpscale] neither {canonical} nor "
+                                   f"{low} exists -- nothing to upscale.")
+            if not _sorted_image_names(canonical):
+                raise RuntimeError(f"[PrepareDatasetUpscale] no images found in {canonical}")
+            os.rename(canonical, low)                    # atomic; originals preserved
+            os.makedirs(canonical, exist_ok=True)
+            print(f"[PrepareDatasetUpscale] preserved originals: {canonical} -> {low}")
+        else:
+            os.makedirs(canonical, exist_ok=True)
+            print(f"[PrepareDatasetUpscale] originals already at {low}; re-run "
+                  "(images/ will be refilled, originals untouched).")
+
+        names = _sorted_image_names(low)
+        if not names:
+            raise RuntimeError(f"[PrepareDatasetUpscale] no images found in {low}")
+        print(f"[PrepareDatasetUpscale] {len(names)} original frame(s) in {low}\n"
+              f"                        upscaled frames go to {canonical} "
+              f"(same filenames -> sparse/0/images.bin still matches)")
+        return (low, canonical, len(names))
 
 
 # ---------------------------------------------------------------------------
@@ -642,7 +869,29 @@ class SaveUpscaledFramesStreaming:
                                "Absolute, or relative to ComfyUI/output."}),
                 "filename_pattern": ("STRING", {"default": "{i:05d}.png",
                     "tooltip": "Python format for each frame's filename; {i} is the running "
-                               "0-based frame index. Sequential naming keeps temporal order."}),
+                               "0-based frame index. Sequential naming keeps temporal order. "
+                               "Ignored when source_names_dir is set."}),
+                "source_names_dir": ("STRING", {"default": "",
+                    "tooltip": "Optional folder of the ORIGINAL images. When set, each "
+                               "upscaled frame is written under the original filename "
+                               "(lexical order, matching the VHS loader) instead of "
+                               "filename_pattern -- required for an in-place COLMAP dataset "
+                               "upscale so sparse/0/images.bin keeps matching. Wire "
+                               "Prepare Dataset Upscale -> load_dir here."}),
+                "order_names": ("STRING", {"default": "",
+                    "tooltip": "JSON list of the filenames in the EXACT order the frames "
+                               "arrive. Wire Load Dataset Images (Ordered) -> order_names "
+                               "here whenever the stream is CAMERA-MAJOR -- a lexical "
+                               "source_names_dir listing would map the frames to the wrong "
+                               "files. Takes precedence over source_names_dir."}),
+                "passthrough_json": ("STRING", {"default": "",
+                    "tooltip": "Wire Load Dataset Images (Ordered) -> passthrough_json. Names "
+                               "listed there are NOT written from the upscaled tensor: their "
+                               "untouched ORIGINAL file is copied to the output instead, at "
+                               "its native resolution. Frame 00000 is the real panorama and "
+                               "has its own larger COLMAP camera, so it is passed through the "
+                               "model only to give it temporal context -- the generated "
+                               "version is discarded and the real pixels are kept."}),
                 "meta_batch": ("VHS_BatchManager", {
                     "tooltip": "Wire the SAME Meta Batch Manager that drives the loader here "
                                "so this node accumulates across iterations and finalises on "
@@ -670,9 +919,25 @@ class SaveUpscaledFramesStreaming:
         return os.path.normpath(os.path.abspath(target))
 
     def save(self, images, canonical_dir="", out_suffix="_upscaled", out_dir="",
-             filename_pattern="{i:05d}.png", meta_batch=None, unique_id=None, prompt=None):
+             filename_pattern="{i:05d}.png", source_names_dir="", order_names="",
+             passthrough_json="", meta_batch=None, unique_id=None, prompt=None):
+        import shutil
         import numpy as np
         from PIL import Image
+
+        # Frames whose ORIGINAL file is copied through instead of the generated upscale.
+        pt_dir, pt_names = "", set()
+        if passthrough_json and passthrough_json.strip():
+            try:
+                pt = json.loads(passthrough_json)
+            except Exception as e:
+                raise RuntimeError("[SaveUpscaledFramesStreaming] passthrough_json is not "
+                                   f"valid JSON: {e}")
+            pt_dir = (pt.get("dir") or "").strip()
+            pt_names = set(pt.get("names") or [])
+            if pt_names and not os.path.isdir(pt_dir):
+                raise RuntimeError("[SaveUpscaledFramesStreaming] passthrough source folder "
+                                   f"not found: {pt_dir!r}")
 
         target = self._resolve_target(canonical_dir, out_suffix, out_dir)
 
@@ -683,6 +948,16 @@ class SaveUpscaledFramesStreaming:
             raise RuntimeError(f"[SaveUpscaledFramesStreaming] refusing to write into the "
                                f"originals folder {target}. Pick a different out_dir / "
                                f"out_suffix so the originals are preserved.")
+        src_names_dir = (source_names_dir or "").strip().strip('"')
+        if src_names_dir:
+            src_names_dir = os.path.normpath(os.path.abspath(src_names_dir))
+            if not os.path.isdir(src_names_dir):
+                raise RuntimeError("[SaveUpscaledFramesStreaming] source_names_dir not "
+                                   f"found: {src_names_dir}")
+            if target == src_names_dir:
+                raise RuntimeError("[SaveUpscaledFramesStreaming] refusing to write into "
+                                   f"source_names_dir {target} -- that folder holds the "
+                                   "pristine originals. Point out_dir somewhere else.")
 
         first = (meta_batch is None) or (unique_id not in _STREAM_STATE)
         if first:
@@ -697,18 +972,84 @@ class SaveUpscaledFramesStreaming:
                 else int(images.shape[0])
             if not total or total == float("inf"):
                 total = None
-            _STREAM_STATE[unique_id] = {"dir": target, "written": 0, "total": total}
+            # Original filenames, resolved ONCE, so frame k of the loop lands back on the
+            # file it was loaded from. An explicit order_names list wins: it is the only
+            # thing that is correct for a CAMERA-MAJOR stream, where the arrival order is
+            # deliberately not the lexical one.
+            names = None
+            if order_names and order_names.strip():
+                try:
+                    names = list(json.loads(order_names))
+                except Exception as e:
+                    raise RuntimeError("[SaveUpscaledFramesStreaming] order_names is not "
+                                       f"valid JSON: {e}")
+                if not names:
+                    raise RuntimeError("[SaveUpscaledFramesStreaming] order_names is empty.")
+                if src_names_dir:
+                    avail = set(_sorted_image_names(src_names_dir))
+                    missing = [x for x in names if x not in avail]
+                    if missing:
+                        raise RuntimeError(
+                            f"[SaveUpscaledFramesStreaming] {len(missing)} name(s) in "
+                            f"order_names are not present in {src_names_dir} (e.g. "
+                            f"{missing[:3]}). Do the loader and this node target the same "
+                            "dataset?")
+            elif src_names_dir:
+                names = _sorted_image_names(src_names_dir)
+                if not names:
+                    raise RuntimeError("[SaveUpscaledFramesStreaming] no images found in "
+                                       f"source_names_dir {src_names_dir}")
+            if pt_names and names is None:
+                raise RuntimeError(
+                    "[SaveUpscaledFramesStreaming] passthrough_json needs the frame names "
+                    "too -- wire order_names (or source_names_dir) as well, otherwise there "
+                    "is no way to tell which arriving frame is a passthrough.")
+            unknown = pt_names - set(names or ())
+            if unknown:
+                raise RuntimeError(
+                    f"[SaveUpscaledFramesStreaming] {len(unknown)} passthrough name(s) are "
+                    f"not in the frame list (e.g. {sorted(unknown)[:3]}). Are the loader and "
+                    "this node pointed at the same dataset?")
+            _STREAM_STATE[unique_id] = {"dir": target, "written": 0, "total": total,
+                                        "names": names, "passed": 0}
             print(f"[SaveUpscaledFramesStreaming] target={target}"
                   f"{f'  (cleared {removed} old frame(s))' if removed else ''}"
                   f"{f'  expecting {total} frame(s)' if total else ''}"
+                  f"{f'  [{len(names)} original filenames, ' + ('camera-major order_names' if order_names.strip() else 'lexical from ' + src_names_dir) + ']' if names else ''}"
                   f"{'  [meta-batch streaming]' if meta_batch is not None else '  [single batch]'}")
 
         st = _STREAM_STATE[unique_id]
         target = st["dir"]
+        names = st.get("names")
 
         is_torch = hasattr(images, "detach")
         n = int(images.shape[0])
         for i in range(n):
+            idx = st["written"] + i
+            if names is not None:
+                if idx >= len(names):
+                    raise RuntimeError(
+                        f"[SaveUpscaledFramesStreaming] received more frames ({idx + 1}) "
+                        f"than there are originals ({len(names)}). Nothing in the originals "
+                        "folder was touched. Check the loader's image_load_cap / "
+                        "select_every_nth.")
+                fname = names[idx]
+            else:
+                fname = filename_pattern.format(i=idx)
+            out_path = os.path.join(target, fname)
+
+            # Passthrough: the generated frame is discarded and the untouched original
+            # copied byte-for-byte, keeping its native resolution (it has its own COLMAP
+            # camera, so a different size here is correct, not a mismatch).
+            if fname in pt_names:
+                src = os.path.join(pt_dir, fname)
+                if not os.path.isfile(src):
+                    raise RuntimeError("[SaveUpscaledFramesStreaming] passthrough original "
+                                       f"missing: {src}")
+                shutil.copy2(src, out_path)
+                st["passed"] += 1
+                continue
+
             if is_torch:
                 frame = images[i].detach().cpu().float().numpy()
             else:
@@ -716,8 +1057,6 @@ class SaveUpscaledFramesStreaming:
             frame = np.clip(frame * 255.0, 0, 255).astype(np.uint8)
             if frame.ndim == 3 and frame.shape[-1] == 1:
                 frame = frame[..., 0]
-            fname = filename_pattern.format(i=st["written"] + i)
-            out_path = os.path.join(target, fname)
             img = Image.fromarray(frame)
             ext = os.path.splitext(fname)[1].lower()
             if ext in (".jpg", ".jpeg"):
@@ -732,10 +1071,22 @@ class SaveUpscaledFramesStreaming:
 
         last = (meta_batch is None) or bool(getattr(meta_batch, "has_closed_inputs", False))
         if last:
-            print(f"[SaveUpscaledFramesStreaming] DONE: {st['written']} upscaled frame(s) "
-                  f"saved to {target}\n"
-                  f"  Next: run the SfM-from-upscaled workflow pointing a loader at this "
-                  f"folder -> SphereSfM Dataset (mode=colmap_now).")
+            if names is not None:
+                short = (f"  WARNING: only {st['written']} of {len(names)} originals were "
+                         f"upscaled -- {target} is INCOMPLETE. The originals are untouched; "
+                         f"re-run to finish.\n") if st["written"] < len(names) else ""
+                passed = (f"  {st['passed']} frame(s) were PASSED THROUGH: their original "
+                          f"file was copied unchanged instead of the generated upscale.\n"
+                          ) if st["passed"] else ""
+                print(f"[SaveUpscaledFramesStreaming] DONE: {st['written']} frame(s) "
+                      f"saved to {target} under the ORIGINAL filenames.\n{passed}{short}"
+                      f"  The dataset is upscaled in place -- sparse/0 still matches, and the "
+                      f"originals are kept in the *_lowres folder.")
+            else:
+                print(f"[SaveUpscaledFramesStreaming] DONE: {st['written']} upscaled frame(s) "
+                      f"saved to {target}\n"
+                      f"  Next: run the SfM-from-upscaled workflow pointing a loader at this "
+                      f"folder -> SphereSfM Dataset (mode=colmap_now).")
             _STREAM_STATE.pop(unique_id, None)
         return (target,)
 
@@ -857,6 +1208,7 @@ class SphereSfMDatasetDualRes:
 NODE_CLASS_MAPPINGS = {
     "SplatKit_ResolveDatasetImages": ResolveDatasetImages,
     "SplatKit_LoadDatasetImagesOrdered": LoadDatasetImagesOrdered,
+    "SplatKit_PrepareDatasetUpscale": PrepareDatasetUpscale,
     "SplatKit_SaveUpscaledDataset": SaveUpscaledDataset,
     "SplatKit_SaveUpscaledFramesStreaming": SaveUpscaledFramesStreaming,
     "SplatKit_SphereSfMDatasetDualRes": SphereSfMDatasetDualRes,
@@ -864,6 +1216,7 @@ NODE_CLASS_MAPPINGS = {
 NODE_DISPLAY_NAME_MAPPINGS = {
     "SplatKit_ResolveDatasetImages": "Resolve Dataset Images",
     "SplatKit_LoadDatasetImagesOrdered": "Load Dataset Images (Ordered)",
+    "SplatKit_PrepareDatasetUpscale": "Prepare Dataset Upscale (swap originals first)",
     "SplatKit_SaveUpscaledDataset": "Save Upscaled Dataset",
     "SplatKit_SaveUpscaledFramesStreaming": "Save Upscaled Frames (Streaming)",
     "SplatKit_SphereSfMDatasetDualRes": "SphereSfM Dataset (Dual-Res: low-res SfM + 8K faces)",

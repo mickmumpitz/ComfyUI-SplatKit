@@ -5,7 +5,9 @@ ComfyUI tensors, and calls the engine. Grouped by pipeline stage:
 
     common.py         output paths, MoGe checkpoint plumbing, Dataset Project
     camera_plot.py    the fly-through node, its editor support and HTTP routes
+    camera_plot_persp.py  the same editor/rail, rendered through a real pinhole lens
     wan.py            Wan I2V masked-video conditioning
+    mask_mix.py       holes + semantic region -> one weighted mask
     spheresfm.py      COLMAP dataset build + add-a-trajectory
     hires.py          HiRes pinhole fly-through straight from the pano
     hires_dataset.py  register those renders into an existing dataset
@@ -26,9 +28,12 @@ NODE_DISPLAY_NAME_MAPPINGS = {}
 _MODULES = [
     ("common", "shared/MoGe nodes"),
     ("wan", "Wan conditioning node"),
+    ("mask_mix", "mask mix node"),
     ("camera_plot", "camera plot nodes"),
     ("spheresfm", "SphereSfM dataset nodes"),
     ("hires", "hires render node"),
+    # after hires: it reuses that module's pinhole renderer helpers.
+    ("camera_plot_persp", "perspective camera plot node"),
     ("hires_dataset", "hires dataset node"),
     ("upscale", "upscale nodes"),
     ("repair", "rebuild-sparse node"),

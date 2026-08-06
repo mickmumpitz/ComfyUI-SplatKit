@@ -1,0 +1,642 @@
+{
+  "id": "wf2a2-upscale-colmap-seedvr2-batched",
+  "revision": 0,
+  "last_node_id": 30,
+  "last_link_id": 17,
+  "nodes": [
+    {
+      "id": 2,
+      "type": "SplatKit_PrepareDatasetUpscale",
+      "pos": [
+        -940,
+        160
+      ],
+      "size": [
+        400,
+        146
+      ],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "load_dir",
+          "type": "STRING",
+          "slot_index": 0,
+          "links": [
+            9
+          ]
+        },
+        {
+          "name": "canonical_dir",
+          "type": "STRING",
+          "slot_index": 1,
+          "links": [
+            5
+          ]
+        },
+        {
+          "name": "frame_count",
+          "type": "INT",
+          "slot_index": 2,
+          "links": null
+        }
+      ],
+      "title": "1. Prepare Dataset Upscale (images -> images_lowres, UP FRONT)",
+      "properties": {
+        "aux_id": "mickmumpitz/ComfyUI-SplatKit",
+        "Node name for S&R": "SplatKit_PrepareDatasetUpscale"
+      },
+      "widgets_values": [
+        "dark-alley-01",
+        "",
+        "_lowres"
+      ]
+    },
+    {
+      "id": 30,
+      "type": "SplatKit_LoadDatasetImagesOrdered",
+      "pos": [
+        -940,
+        380
+      ],
+      "size": [
+        400,
+        230
+      ],
+      "flags": {},
+      "order": 6,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "dataset_path",
+          "type": "STRING",
+          "widget": {
+            "name": "dataset_path"
+          },
+          "link": 9
+        },
+        {
+          "name": "meta_batch",
+          "shape": 7,
+          "type": "VHS_BatchManager",
+          "link": 14
+        }
+      ],
+      "outputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "slot_index": 0,
+          "links": [
+            1,
+            11
+          ]
+        },
+        {
+          "name": "order_names",
+          "type": "STRING",
+          "slot_index": 1,
+          "links": [
+            8
+          ]
+        },
+        {
+          "name": "canonical_dir",
+          "type": "STRING",
+          "slot_index": 2,
+          "links": null
+        },
+        {
+          "name": "group_sizes",
+          "type": "STRING",
+          "slot_index": 3,
+          "links": null
+        },
+        {
+          "name": "suggested_batch_size",
+          "type": "INT",
+          "slot_index": 4,
+          "links": null
+        },
+        {
+          "name": "passthrough_json",
+          "type": "STRING",
+          "slot_index": 5,
+          "links": [
+            16
+          ]
+        }
+      ],
+      "title": "2. Load Dataset Images (Ordered) — STREAMING, camera-major",
+      "properties": {
+        "aux_id": "mickmumpitz/ComfyUI-SplatKit",
+        "Node name for S&R": "SplatKit_LoadDatasetImagesOrdered"
+      },
+      "widgets_values": [
+        "dark-alley-01",
+        "",
+        "_lowres",
+        -1,
+        "resize_and_passthrough"
+      ]
+    },
+    {
+      "id": 10,
+      "type": "VHS_BatchManager",
+      "pos": [
+        -940,
+        680
+      ],
+      "size": [
+        400,
+        82
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "meta_batch",
+          "type": "VHS_BatchManager",
+          "links": [
+            12,
+            14,
+            15
+          ]
+        }
+      ],
+      "title": "Meta Batch Manager (81 = ONE camera view per iteration)",
+      "properties": {
+        "cnr_id": "comfyui-videohelpersuite",
+        "ver": "4ee72c065db22c9d96c2427954dc69e7b908444b",
+        "Node name for S&R": "VHS_BatchManager"
+      },
+      "widgets_values": {
+        "frames_per_batch": 81
+      }
+    },
+    {
+      "id": 4,
+      "type": "SeedVR2LoadDiTModel",
+      "pos": [
+        -450,
+        160
+      ],
+      "size": [
+        360,
+        202
+      ],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "torch_compile_args",
+          "shape": 7,
+          "type": "TORCH_COMPILE_ARGS",
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "name": "SEEDVR2_DIT",
+          "type": "SEEDVR2_DIT",
+          "slot_index": 0,
+          "links": [
+            6
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "seedvr2_videoupscaler",
+        "ver": "2.5.22",
+        "Node name for S&R": "SeedVR2LoadDiTModel"
+      },
+      "widgets_values": [
+        "seedvr2_ema_3b_fp8_e4m3fn.safetensors",
+        "cuda:0",
+        0,
+        false,
+        "none",
+        false,
+        "sdpa"
+      ]
+    },
+    {
+      "id": 5,
+      "type": "SeedVR2LoadVAEModel",
+      "pos": [
+        -450,
+        410
+      ],
+      "size": [
+        360,
+        298
+      ],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "torch_compile_args",
+          "shape": 7,
+          "type": "TORCH_COMPILE_ARGS",
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "name": "SEEDVR2_VAE",
+          "type": "SEEDVR2_VAE",
+          "slot_index": 0,
+          "links": [
+            7
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "seedvr2_videoupscaler",
+        "ver": "2.5.22",
+        "Node name for S&R": "SeedVR2LoadVAEModel"
+      },
+      "widgets_values": [
+        "ema_vae_fp16.safetensors",
+        "cuda:0",
+        false,
+        1024,
+        128,
+        false,
+        1024,
+        128,
+        "false",
+        "none",
+        false
+      ]
+    },
+    {
+      "id": 7,
+      "type": "SeedVR2VideoUpscaler",
+      "pos": [
+        -20,
+        160
+      ],
+      "size": [
+        360,
+        386
+      ],
+      "flags": {},
+      "order": 7,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "image",
+          "type": "IMAGE",
+          "link": 1
+        },
+        {
+          "name": "dit",
+          "type": "SEEDVR2_DIT",
+          "link": 6
+        },
+        {
+          "name": "vae",
+          "type": "SEEDVR2_VAE",
+          "link": 7
+        }
+      ],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "slot_index": 0,
+          "links": [
+            4
+          ]
+        }
+      ],
+      "title": "3. SeedVR2 (batch_size == frames_per_batch)",
+      "properties": {
+        "cnr_id": "seedvr2_videoupscaler",
+        "ver": "2.5.22",
+        "Node name for S&R": "SeedVR2VideoUpscaler"
+      },
+      "widgets_values": [
+        42,
+        "fixed",
+        2048,
+        0,
+        81,
+        true,
+        "lab",
+        0,
+        0,
+        0,
+        0,
+        "cpu",
+        false
+      ]
+    },
+    {
+      "id": 6,
+      "type": "SplatKit_SaveUpscaledFramesStreaming",
+      "pos": [
+        420,
+        160
+      ],
+      "size": [
+        460,
+        220
+      ],
+      "flags": {},
+      "order": 8,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 4
+        },
+        {
+          "name": "out_dir",
+          "type": "STRING",
+          "widget": {
+            "name": "out_dir"
+          },
+          "link": 5
+        },
+        {
+          "name": "order_names",
+          "type": "STRING",
+          "widget": {
+            "name": "order_names"
+          },
+          "link": 8
+        },
+        {
+          "name": "passthrough_json",
+          "type": "STRING",
+          "widget": {
+            "name": "passthrough_json"
+          },
+          "link": 16
+        },
+        {
+          "name": "meta_batch",
+          "shape": 7,
+          "type": "VHS_BatchManager",
+          "link": 15
+        }
+      ],
+      "outputs": [
+        {
+          "name": "images_dir",
+          "type": "STRING",
+          "slot_index": 0,
+          "links": null
+        }
+      ],
+      "title": "4. Save Upscaled Frames (Streaming) -> images/ under ORIGINAL filenames",
+      "properties": {
+        "aux_id": "mickmumpitz/ComfyUI-SplatKit",
+        "Node name for S&R": "SplatKit_SaveUpscaledFramesStreaming"
+      },
+      "widgets_values": [
+        "",
+        "_upscaled",
+        "",
+        "{i:05d}.png",
+        "",
+        "",
+        ""
+      ]
+    },
+    {
+      "id": 11,
+      "type": "VHS_VideoCombine",
+      "pos": [
+        -450,
+        780
+      ],
+      "size": [
+        425.26666259765625,
+        334
+      ],
+      "flags": {},
+      "order": 9,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 11
+        },
+        {
+          "name": "audio",
+          "shape": 7,
+          "type": "AUDIO",
+          "link": null
+        },
+        {
+          "name": "meta_batch",
+          "shape": 7,
+          "type": "VHS_BatchManager",
+          "link": 12
+        },
+        {
+          "name": "vae",
+          "shape": 7,
+          "type": "VAE",
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "name": "Filenames",
+          "type": "VHS_FILENAMES",
+          "links": null
+        }
+      ],
+      "title": "Loop driver (throwaway - required by VHS meta-batch)",
+      "properties": {
+        "cnr_id": "comfyui-videohelpersuite",
+        "ver": "4ee72c065db22c9d96c2427954dc69e7b908444b",
+        "Node name for S&R": "VHS_VideoCombine"
+      },
+      "widgets_values": {
+        "frame_rate": 24,
+        "loop_count": 0,
+        "filename_prefix": "upscale_loop_driver",
+        "format": "video/h264-mp4",
+        "pix_fmt": "yuv420p",
+        "crf": 30,
+        "save_metadata": false,
+        "trim_to_audio": false,
+        "pingpong": false,
+        "save_output": false
+      }
+    },
+    {
+      "id": 1,
+      "type": "Note",
+      "pos": [
+        -940,
+        -740
+      ],
+      "size": [
+        620,
+        840
+      ],
+      "flags": {},
+      "order": 4,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "properties": {},
+      "widgets_values": [
+        "WF 2a2 - SEEDVR2 COLMAP UPSCALE, ONE CAMERA VIEW AT A TIME\n\nSame upscaler and same in-place result as 2a, but the dataset is STREAMED through\nSeedVR2 in meta-batches instead of being loaded, upscaled and returned whole.\n\nWHAT ACTUALLY BLEW UP IN 2a\nNot SeedVR2's own VRAM -- its batch_size already capped that at 81 frames. The\nkiller was the ComfyUI tensors either side of it: 'Load Dataset Images (Ordered)'\nreturned all 1944 faces at once, and the node had to return every UPSCALED face in\none IMAGE batch before the saver ever ran. At resolution=2048 that return value\nalone is 1944 x 2048 x 2048 x 3 x 4 bytes = ~98 GB. It cannot fit, whatever GPU\nyou have.\n\nTHE FIX\nThe Meta Batch Manager (frames_per_batch=81) makes ComfyUI re-run the whole rail\nONCE PER CAMERA VIEW. The loader yields 81 faces, SeedVR2 upscales those 81, the\nstreaming saver writes them to disk, and the tensors are freed before the next\niteration. Peak = one view, not the whole dataset. 1944 faces = 24 iterations.\n\nWHY 81 AND NOT 1\nSeedVR2 is a TEMPORAL model - a 1-frame meta-batch would destroy the very thing it\nis good at. 81 is one full cube-face sub-video from the marker, so each iteration is\nexactly one coherent view. Keep the three numbers in agreement:\n\n    frames_per_batch (Meta Batch Manager)  ==  batch_size (SeedVR2)  ==  81\n\nSTILL OOMs? Step BOTH down together to a DIVISOR of the per-view length that is also\n4n+1: 81 -> 9 -> 1. (27 and 3 divide 81 but are not 4n+1, so SeedVR2 would re-chunk\nthem.) Never pick 5/13/21 - they do not divide 81 and chunks would straddle two view\ndirections. The loader PRINTS a warning if frames_per_batch does not divide the\ngroup size, and prints suggested_batch_size on every run.\nThe other lever is resolution (SeedVR2's target for the SHORT edge): on ~360px cube\nfaces 2048 is already a ~5.7x upscale. 1024 halves each edge and quarters the memory.\n\nFRAME 00000 IS THE REAL PANORAMA - IT IS NOT UPSCALED\nframe_00000's cube faces come from the ORIGINAL pano, so they are larger than the\nrest (dark-alley-01: 512x512 vs 360x360) and COLMAP gives them their own camera --\ncameras.bin here holds SIMPLE_PINHOLE 512x512 AND 360x360. They are real pixels; a\ngenerative upscaler can only invent detail over them.\n\nSo on_size_mismatch=resize_and_passthrough does two things:\n  LOAD  - the odd-sized faces are resized DOWN to the majority size, purely so the\n          batch is uniform and SeedVR2 still gets them as temporal context.\n  SAVE  - their generated output is DISCARDED. The untouched original file is copied\n          byte-for-byte into images/ at its native 512x512.\nThat is what passthrough_json carries (loader -> saver): the folder plus the list of\nnames to copy rather than write. The console reports how many were passed through.\nThe mixed output size is CORRECT - each camera keeps matching its own images.\n\nSet on_size_mismatch=error instead if you would rather be told about odd sizes than\nhave them handled - a corrupt reprojection looks identical to an original pano here.\n\nORDER MATTERS TWICE\n1. Reading camera-major (all of face 0 across time, then face 1, ...) is what gives\n   SeedVR2 a stable view per sequence, instead of the direction flipping 6x per frame.\n2. Because of that, the arrival order is NOT lexical, so the saver is fed the\n   loader's 'order_names' list - each upscaled face goes back to the filename it came\n   from, and sparse/0/images.bin keeps matching. Do not swap this for a folder listing.\n\nSAFETY / IDEMPOTENCE\n'Prepare Dataset Upscale' does the images -> images_lowres rename ONCE, BEFORE the\nloop, and recreates images/ empty. The swap cannot be done at the end the way 2a's\n'Save Upscaled Dataset' does it: renaming the source folder mid-loop would make every\nnot-yet-read frame disappear. Re-running is safe - images_lowres/ already exists, so\nnothing is renamed and images/ is simply refilled from the untouched originals.\nCrashed half way? images/ is partial, originals are intact, just run it again.\n\nHOW TO USE\n1. Set 'dataset_name' on BOTH SplatKit nodes to your SphereSfM output_name.\n   (The loader also takes load_dir on its dataset_path input, so it always reads the\n   preserved originals rather than the folder being written.)\n2. Queue ONCE. VHS requeues the graph itself, once per view; watch the console for\n   'Meta-Batch n/24'.\n\nThe throwaway VHS_VideoCombine is REQUIRED: VideoHelperSuite only keeps a meta-batch\nloop requeueing while a VHS_VideoCombine sits on the manager. It is fed the cheap\nlow-res frames with save_output=false, so it only advances the loop."
+      ],
+      "color": "#432",
+      "bgcolor": "#653"
+    },
+    {
+      "id": 20,
+      "type": "Note",
+      "pos": [
+        -280,
+        780
+      ],
+      "size": [
+        420,
+        200
+      ],
+      "flags": {},
+      "order": 5,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "properties": {},
+      "widgets_values": [
+        "TOO SLOW / STILL TIGHT?\n\n- camera_index on the loader (-1 = all) restricts the run to ONE view - one cube\n  face within one trajectory. dark-alley-01 has 24 of them, 81 frames each, so you\n  can time a single view before committing to the whole dataset.\n- The console lists every camera_index and its frame range on each run.\n- The loader probes every header up front, so a size problem shows up in seconds\n  rather than an hour in. With resize_and_passthrough the odd frame-00000 faces are\n  handled automatically (see the main note); with 'error' you get the file list.\n- dark-alley-01 is currently MISSING 7 images that sparse/0/images.bin still\n  registers (all six frame_00000 faces plus frame_00001_perspective_00000000).\n  Restore them before running, or the passthrough has nothing to copy."
+      ],
+      "color": "#432",
+      "bgcolor": "#653"
+    }
+  ],
+  "links": [
+    [
+      1,
+      30,
+      0,
+      7,
+      0,
+      "IMAGE"
+    ],
+    [
+      4,
+      7,
+      0,
+      6,
+      0,
+      "IMAGE"
+    ],
+    [
+      5,
+      2,
+      1,
+      6,
+      1,
+      "STRING"
+    ],
+    [
+      6,
+      4,
+      0,
+      7,
+      1,
+      "SEEDVR2_DIT"
+    ],
+    [
+      7,
+      5,
+      0,
+      7,
+      2,
+      "SEEDVR2_VAE"
+    ],
+    [
+      8,
+      30,
+      1,
+      6,
+      2,
+      "STRING"
+    ],
+    [
+      9,
+      2,
+      0,
+      30,
+      0,
+      "STRING"
+    ],
+    [
+      11,
+      30,
+      0,
+      11,
+      0,
+      "IMAGE"
+    ],
+    [
+      12,
+      10,
+      0,
+      11,
+      2,
+      "VHS_BatchManager"
+    ],
+    [
+      14,
+      10,
+      0,
+      30,
+      1,
+      "VHS_BatchManager"
+    ],
+    [
+      15,
+      10,
+      0,
+      6,
+      4,
+      "VHS_BatchManager"
+    ],
+    [
+      16,
+      30,
+      5,
+      6,
+      3,
+      "STRING"
+    ]
+  ],
+  "groups": [],
+  "config": {},
+  "extra": {
+    "ds": {
+      "scale": 0.8,
+      "offset": [
+        1100,
+        800
+      ]
+    },
+    "VHS_latentpreview": true,
+    "VHS_latentpreviewrate": 0,
+    "VHS_MetadataImage": true,
+    "VHS_KeepIntermediate": true
+  },
+  "version": 0.4
+}
