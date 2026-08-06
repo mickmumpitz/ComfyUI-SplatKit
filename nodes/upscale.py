@@ -213,20 +213,86 @@ def _resolve_upscale_order(marker, load_dir):
             groups.append(len(leftover))
         if flat:
             return flat, groups
-    # No usable marker: derive from filenames (one group -- seam info unknown).
+    # No usable marker: derive from the filenames. Cube faces still give real group
+    # boundaries (one group per face index) -- reporting a single group of everything would
+    # advise a frames_per_batch of the whole dataset, which defeats the meta-batch.
     ordered = _camera_major_from_names(present)
-    return ordered, [len(ordered)]
+    groups, last = [], object()
+    for n in ordered:
+        m = _FACE_RE.search(n)
+        key = int(m.group(2)) if m else "_"      # non-face names collapse to one group
+        if key != last:
+            groups.append(0)
+            last = key
+        groups[-1] += 1
+    return ordered, groups or [len(ordered)]
 
 
-def _largest_4n1_divisor(n):
+def stride_group(names, every_nth, drop_partial=False):
+    """Thin ONE coherent view/trajectory: keep every Nth name, counting from its first.
+
+    Always applied per group, never to the flat camera-major list -- striding across the
+    concatenation would walk through view boundaries and leave ragged groups whose chunks
+    hold two different view directions.
+
+    ``drop_partial`` decides what happens to the ragged tail. With 81 frames and N=5 the
+    sequence is 16 complete 5-frame windows plus one leftover frame:
+      * False (default) -> 17 kept; the leftover frame at index 80 still lands on the
+        stride and is kept.
+      * True            -> 16 kept; a frame is kept only if a COMPLETE window of N frames
+        starts at it, so the one that falls out of the stride is omitted.
+    Shared by the loader node and tools/stride_dataset.py so both agree on exactly which
+    frames are on-stride -- if they disagreed, the dataset surgery would target the wrong
+    files.
+    """
+    n = max(1, int(every_nth))
+    if n == 1:
+        return list(names)
+    last = len(names) - (n - 1) if drop_partial else len(names)
+    return [names[i] for i in range(0, max(0, last), n)]
+
+
+def _pick_batch_size(per_view, cap=0):
+    """Choose SeedVR2's batch_size for a META-BATCHED run -> (batch, exact_divisor).
+
+    The strict "must divide the view length" rule belongs to the OLD arrangement, where
+    SeedVR2 was handed the whole concatenated dataset and chunked it with
+    ``range(0, total, batch_size)`` blind to where one view ended and the next began. Under
+    a Meta Batch Manager it receives exactly ONE view per call, so every chunk is inside
+    that view no matter what batch_size is -- straddling is impossible and divisibility is
+    no longer a correctness constraint, only a tidiness one.
+
+    So: take the largest exact divisor that fits (uniform chunks, nothing padded); if the
+    only divisor that fits is 1, fall back to the largest 4n+1 at or below the limit and
+    let ``uniform_batch_size`` pad the ragged final chunk -- which is exactly what that
+    option is for. Without this fallback a 21-frame view under a cap of 9 would collapse to
+    batch_size 1, i.e. no temporal context at all, which is far worse than one padded tail.
+
+    batch_size can never exceed the view length, so a cap above it (or 0) simply means
+    "pick the best value automatically".
+    """
+    per_view = max(1, int(per_view))
+    cap = int(cap or 0)
+    limit = per_view if cap <= 0 else max(1, min(per_view, cap))
+    best_div = max((d for d in range(1, per_view + 1)
+                    if per_view % d == 0 and d % 4 == 1 and d <= limit), default=1)
+    if best_div > 1:
+        return best_div, True
+    return max(1, 4 * ((limit - 1) // 4) + 1), False
+
+
+def _largest_4n1_divisor(n, cap=0):
     """Largest d that divides n and satisfies d % 4 == 1 (a valid SeedVR2 batch_size).
-    Always >= 1 (d=1 is 4*0+1)."""
+
+    ``cap`` (>0) additionally bounds d, so a VRAM ceiling can be expressed once and still
+    yield a legal batch: 81 with cap 9 -> 9, not 81. Always >= 1 (d=1 is 4*0+1)."""
     n = int(n)
     if n <= 0:
         return 1
+    cap = int(cap or 0)
     best = 1
     for d in range(1, n + 1):
-        if n % d == 0 and d % 4 == 1:
+        if n % d == 0 and d % 4 == 1 and (cap <= 0 or d <= cap):
             best = d
     return best
 
@@ -516,13 +582,43 @@ class LoadDatasetImagesOrdered:
                                "COLMAP camera) -- wire passthrough_json into Save Upscaled "
                                "Frames (Streaming) and its untouched original is copied to "
                                "the output instead of the generated upscale."}),
+                "prepare_in_place": ("BOOLEAN", {"default": False,
+                    "tooltip": "Do the originals-preserving swap here, before the first read: "
+                               "images/ -> images_lowres/ (once, atomically) and a fresh empty "
+                               "images/ for the saver to fill. Idempotent, so a re-run renames "
+                               "nothing. Turn this ON for an in-place COLMAP dataset upscale "
+                               "and you do not need a separate Prepare node."}),
+                "select_every_nth": ("INT", {"default": 1, "min": 1, "max": 1000,
+                    "tooltip": "Thin the sequence: keep every Nth frame. Applied INSIDE each "
+                               "view group, never across the flat list -- 24 views of 81 at "
+                               "N=3 become 24 views of 27, so no chunk ever straddles a view "
+                               "boundary and the loop still sees coherent sub-videos. Counting "
+                               "starts at each view's first frame, so frame 00000 (the real "
+                               "panorama) is always kept. group_sizes and suggested_batch_size "
+                               "are recomputed for you.\n"
+                               "WARNING: the skipped frames are then NOT written by the saver, "
+                               "while sparse/0/images.bin still registers them. Reconcile the "
+                               "dataset afterwards with tools/stride_dataset.py (--mode prune "
+                               "or --mode keep-lowres) before training on it."}),
+                "drop_partial_stride": ("BOOLEAN", {"default": False,
+                    "label_on": "omit the leftover frame", "label_off": "keep it",
+                    "tooltip": "What to do with the frame that falls out of the stride. 81 "
+                               "frames at N=5 is 16 complete 5-frame windows plus 1 leftover: "
+                               "off keeps it (17 per view), on omits it (16 per view).\n"
+                               "CAUTION: 17 is 4n+1 so it can be one clean SeedVR2 batch, "
+                               "while 16's only 4n+1 divisor is 1 -- turning this on can "
+                               "collapse suggested_batch_size to 1 and cost you all temporal "
+                               "context. Check the printed suggested_batch_size after changing "
+                               "it, and match tools/stride_dataset.py --drop-partial."}),
             },
             "hidden": {"unique_id": "UNIQUE_ID"},
         }
 
-    RETURN_TYPES = ("IMAGE", "STRING", "STRING", "STRING", "INT", "STRING")
+    # ``job`` bundles everything the saver needs (canonical dir, the exact arrival order,
+    # the passthrough list) into ONE link, so the save side needs no configuring at all.
+    RETURN_TYPES = ("IMAGE", "STRING", "STRING", "STRING", "INT", "STRING", "STRING")
     RETURN_NAMES = ("images", "order_names", "canonical_dir", "group_sizes",
-                    "suggested_batch_size", "passthrough_json")
+                    "batch_size", "passthrough_json", "job")
     FUNCTION = "load"
     CATEGORY = "SplatKit"
 
@@ -606,7 +702,9 @@ class LoadDatasetImagesOrdered:
             yield prev
 
     def load(self, dataset_name="", dataset_path="", lowres_suffix="_lowres",
-             camera_index=-1, meta_batch=None, on_size_mismatch="error", unique_id=None):
+             camera_index=-1, meta_batch=None, on_size_mismatch="error",
+             prepare_in_place=False, select_every_nth=1,
+             drop_partial_stride=False, unique_id=None):
         import itertools
         import numpy as np
         import torch
@@ -625,13 +723,65 @@ class LoadDatasetImagesOrdered:
             if os.path.isdir(base):
                 canonical = base
         low = canonical + lowres_suffix
+
+        # The swap is done HERE, on the folder THIS node resolved -- never delegated to a
+        # node that resolves its own way. Prepare Dataset Upscale keys off the marker
+        # (panoramas_subdir for a panorama_pending dataset) while this node keys off the
+        # images layout; on a dataset that has BOTH panoramas/ and images/ they pick
+        # different folders, and then the swap protects one folder while the loop streams
+        # from another that has no backup at all.
+        if prepare_in_place:
+            if not os.path.isdir(low):
+                if not os.path.isdir(canonical) or not _sorted_image_names(canonical):
+                    raise RuntimeError(f"[LoadDatasetImagesOrdered] prepare_in_place: no "
+                                       f"images to preserve in {canonical}")
+                os.rename(canonical, low)
+                os.makedirs(canonical, exist_ok=True)
+                print(f"[LoadDatasetImagesOrdered] preserved originals: {canonical} -> {low}")
+            else:
+                os.makedirs(canonical, exist_ok=True)
+                print(f"[LoadDatasetImagesOrdered] originals already at {low}; re-run "
+                      f"(refilling {canonical}, originals untouched).")
+
         load_dir = low if os.path.isdir(low) else canonical
+        if prepare_in_place and os.path.normpath(load_dir) == os.path.normpath(canonical):
+            raise RuntimeError(
+                f"[LoadDatasetImagesOrdered] prepare_in_place is on but the load folder and "
+                f"the output folder are both {canonical}. The saver would clear the very "
+                f"files this node is streaming. Refusing to start.")
 
         root = _find_dataset_root(dataset_name, dataset_path)
         marker = _read_marker(root)
         names, groups = _resolve_upscale_order(marker, load_dir)
         if not names:
             raise RuntimeError(f"[LoadDatasetImagesOrdered] no images found in {load_dir}")
+
+        # Thin the sequence PER GROUP. Striding the flat camera-major list instead would
+        # walk across view boundaries, leaving ragged groups and chunks that contain two
+        # different view directions -- exactly what the grouping exists to prevent. Each
+        # view is strided from its own first frame, so every trajectory keeps frame 0.
+        select_every_nth = max(1, int(select_every_nth))
+        if select_every_nth > 1:
+            kept_names, kept_groups, off, before = [], [], 0, len(names)
+            for g in groups:
+                sub = stride_group(names[off:off + g], select_every_nth,
+                                   bool(drop_partial_stride))
+                off += g
+                if sub:
+                    kept_names += sub
+                    kept_groups.append(len(sub))
+            names, groups = kept_names, kept_groups
+            print(f"[LoadDatasetImagesOrdered] select_every_nth={select_every_nth}"
+                  f"{' (leftover frame omitted)' if drop_partial_stride else ''}: "
+                  f"{before} -> {len(names)} images, {len(groups)} view(s) of "
+                  f"{groups[0] if groups else 0} (strided WITHIN each view, so no chunk "
+                  f"straddles a boundary)\n"
+                  f"                           the {before - len(names)} skipped frame(s) "
+                  f"will NOT be written. Reconcile the dataset afterwards:\n"
+                  f"                             python tools\\stride_dataset.py <dataset> "
+                  f"--every-nth {select_every_nth}"
+                  f"{' --drop-partial' if drop_partial_stride else ''} --mode "
+                  f"prune|keep-lowres --apply")
 
         # Console overview so the user knows which camera_index maps to which view.
         offsets = [0]
@@ -653,29 +803,40 @@ class LoadDatasetImagesOrdered:
             print(f"[LoadDatasetImagesOrdered] loading ONLY camera_index={camera_index}: "
                   f"{len(names)} frames ({names[0]} .. {names[-1]})")
 
-        suggested = _suggest_batch_size(groups)
+        # One meta-batch chunk = one whole view. Where views differ in length that is
+        # impossible, so use their GCD -- the largest chunk that still divides every view
+        # and therefore never straddles a boundary.
+        per_view = groups[0]
+        for g in groups[1:]:
+            per_view = math.gcd(per_view, g)
+        batch, _exact = _pick_batch_size(per_view, 0)
 
         # ---- streaming path: hand the loop ONE chunk per iteration -------------
         if meta_batch is not None:
+            fpb = meta_batch.frames_per_batch
             if unique_id not in meta_batch.inputs:
                 size, odd = self._probe_sizes(load_dir, names, on_size_mismatch)
                 gen = self._stream(load_dir, names, size, set(odd), meta_batch, unique_id)
                 w, h = next(gen)
                 meta_batch.inputs[unique_id] = (gen, w, h, odd)
                 meta_batch.total_frames = min(meta_batch.total_frames, next(gen))
-                fpb = meta_batch.frames_per_batch
-                straddles = [i for i, g in enumerate(groups) if g % fpb]
                 print(f"[LoadDatasetImagesOrdered] STREAMING {len(names)} images "
-                      f"camera-major from {load_dir}\n"
-                      f"                           {len(groups)} sub-video group(s), "
-                      f"sizes={groups[:8]}{' ...' if len(groups) > 8 else ''}, "
-                      f"frames_per_batch={fpb} ({w}x{h})")
+                      f"camera-major from {load_dir}  ({w}x{h})\n"
+                      f"                           {len(groups)} view(s), "
+                      f"sizes={groups[:8]}{' ...' if len(groups) > 8 else ''}\n"
+                      f"                           SET frames_per_batch={per_view} on the Meta "
+                      f"Batch Manager (one whole view per iteration)"
+                      f"{'' if fpb == per_view else f'  <-- it is currently {fpb}'}")
+                straddles = sorted({g for g in groups if g % fpb})
                 if straddles:
-                    print(f"[LoadDatasetImagesOrdered] WARNING: frames_per_batch={fpb} does "
-                          f"not divide group size(s) {sorted({groups[i] for i in straddles})} "
-                          f"-- some chunks will straddle a view boundary and SeedVR2 will see "
-                          f"two different view directions in one temporal window. Use a "
-                          f"divisor of the group size instead.")
+                    print(f"[LoadDatasetImagesOrdered] WARNING: frames_per_batch={fpb} does not "
+                          f"divide view size(s) {straddles} -- a chunk will span two views and "
+                          f"SeedVR2 will see two directions in one temporal window. Use "
+                          f"{per_view}, or a divisor of it.")
+                elif fpb <= per_view:
+                    print(f"[LoadDatasetImagesOrdered] each iteration is inside one view, so "
+                          f"ANY 4n+1 SeedVR2 batch_size up to {fpb} is safe (5 and 9 are the "
+                          f"usual picks; {batch} is the largest that divides evenly).")
             gen, w, h, odd = meta_batch.inputs[unique_id]
             chunk = itertools.islice(gen, meta_batch.frames_per_batch)
             images = torch.from_numpy(
@@ -683,8 +844,11 @@ class LoadDatasetImagesOrdered:
             if len(images) == 0:
                 raise RuntimeError("[LoadDatasetImagesOrdered] the meta-batch stream is "
                                    f"exhausted but was polled again ({load_dir}).")
-            return (images, json.dumps(names), canonical, json.dumps(groups), suggested,
-                    json.dumps({"dir": load_dir, "names": odd}))
+            pt = {"dir": load_dir, "names": odd}
+            job = {"canonical_dir": canonical, "load_dir": load_dir, "names": names,
+                   "passthrough": pt, "per_view": per_view, "batch_size": batch}
+            return (images, json.dumps(names), canonical, json.dumps(groups), batch,
+                    json.dumps(pt), json.dumps(job))
 
         # ---- whole-dataset path (no meta_batch) --------------------------------
         (w, h), odd = self._probe_sizes(load_dir, names, on_size_mismatch)
@@ -699,13 +863,169 @@ class LoadDatasetImagesOrdered:
             arrs.append(bgr[..., ::-1])            # BGR -> RGB
         images = torch.from_numpy(np.stack(arrs).astype(np.float32) / 255.0)
 
+        # No meta_batch: SeedVR2 receives every view CONCATENATED and chunks from frame 0,
+        # blind to the boundaries -- so here batch_size must genuinely divide the view
+        # length or a chunk spans two view directions. Hence the strict rule, not the
+        # relaxed one the streaming path can afford.
+        suggested = _suggest_batch_size(groups)
         print(f"[LoadDatasetImagesOrdered] loaded {len(names)} images camera-major from "
               f"{load_dir}\n                           {len(groups)} sub-video group(s), "
               f"sizes={groups[:8]}{' ...' if len(groups) > 8 else ''}\n"
               f"                           suggested SeedVR2 batch_size={suggested} "
-              f"(aligns to view boundaries; drop to the next 4n+1 divisor if VRAM-limited)")
+              f"(no meta_batch, so this MUST divide the view length; "
+              f"drop to the next 4n+1 divisor if VRAM-limited)")
+        pt = {"dir": load_dir, "names": odd}
+        job = {"canonical_dir": canonical, "load_dir": load_dir, "names": names,
+               "passthrough": pt, "per_view": per_view, "batch_size": suggested}
         return (images, json.dumps(names), canonical, json.dumps(groups), suggested,
-                json.dumps({"dir": load_dir, "names": odd}))
+                json.dumps(pt), json.dumps(job))
+
+
+class DatasetUpscalePlan:
+    """Work out the batch numbers for a strided upscale WITHOUT touching the loop.
+
+    WHY IT IS A SEPARATE NODE: the obvious wiring -- Load Dataset Images (Ordered) ->
+    suggested_batch_size -> Meta Batch Manager -> back into the loader's meta_batch --
+    is a dependency cycle, and ComfyUI refuses it ("Dependency cycle detected: 30 -> 10
+    -> 30"). It has to: the manager cannot be built from a value produced by the node it
+    drives. This node reads the dataset marker straight off disk instead, so it depends on
+    nothing in the loop and both numbers can be wired forward:
+
+        Dataset Upscale Plan --frames_per_view----> Meta Batch Manager.frames_per_batch
+                             \\-suggested_batch_size-> SeedVR2.batch_size
+
+    It applies the SAME grouping and stride rule the loader does (shared helpers), so the
+    numbers always describe the frames the loader will actually emit.
+
+    THE RULE IT ENCODES: give the meta-batch a WHOLE view (fewest requeues) and let
+    SeedVR2 chunk that view internally with a batch_size that is 4n+1 AND divides the
+    view length, so no internal chunk straddles a view boundary. ``max_batch_size`` is
+    your VRAM ceiling: with a cap of 9, an 81-frame view yields 9 rather than 81.
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "dataset_name": ("STRING", {"default": "my_scene",
+                    "tooltip": "Same dataset the loader reads."}),
+            },
+            "optional": {
+                "dataset_path": ("STRING", {"default": "",
+                    "tooltip": "Optional explicit path; overrides dataset_name. Wire "
+                               "Prepare Dataset Upscale -> load_dir here to be certain "
+                               "both nodes describe the same folder."}),
+                "lowres_suffix": ("STRING", {"default": "_lowres"}),
+                "camera_index": ("INT", {"default": -1, "min": -1, "max": 4096,
+                    "tooltip": "Must match the loader's camera_index."}),
+                "select_every_nth": ("INT", {"default": 1, "min": 1, "max": 1000,
+                    "tooltip": "Must match the loader's select_every_nth."}),
+                "drop_partial_stride": ("BOOLEAN", {"default": False,
+                    "tooltip": "Must match the loader's drop_partial_stride."}),
+                "max_batch_size": ("INT", {"default": 0, "min": 0, "max": 16384,
+                    "tooltip": "VRAM ceiling for SeedVR2's batch_size. 0 = no cap (take the "
+                               "largest legal value). Set it once to the biggest batch your "
+                               "card handles -- 9 for a 7B fp16 model at resolution 1024 -- "
+                               "and the node always returns a legal batch at or below it."}),
+            },
+        }
+
+    # select_every_nth / drop_partial_stride are echoed back out so the stride can be set
+    # in ONE place and driven into the loader too -- Plan -> loader is acyclic (only
+    # BatchManager -> loader closes a loop). Appended last so existing slot indices hold.
+    RETURN_TYPES = ("INT", "INT", "INT", "INT", "STRING", "INT", "BOOLEAN")
+    RETURN_NAMES = ("frames_per_view", "suggested_batch_size", "num_views",
+                    "total_frames", "plan", "select_every_nth", "drop_partial_stride")
+    FUNCTION = "plan"
+    CATEGORY = "SplatKit"
+
+    @classmethod
+    def IS_CHANGED(cls, **kwargs):
+        return float("nan")          # reads the dataset off disk; never serve a stale plan
+
+    def plan(self, dataset_name="", dataset_path="", lowres_suffix="_lowres",
+             camera_index=-1, select_every_nth=1, drop_partial_stride=False,
+             max_batch_size=0):
+        root = _find_dataset_root(dataset_name, dataset_path)
+        marker = _read_marker(root)
+
+        if marker.get("kind") == "panorama_pending":
+            # Panoramas: the coherent clip is a TRAJECTORY, not a cube face.
+            sub = marker.get("panoramas_subdir", "panoramas")
+            canonical = os.path.normpath(os.path.join(root, sub))
+            low = canonical + lowres_suffix
+            load_dir = low if os.path.isdir(low) else canonical
+            names = _sorted_image_names(load_dir)
+            tl = (marker.get("sfm_params") or {}).get("trajectory_lengths")
+            groups = list(tl) if tl else [len(names)]
+            kind = "panorama"
+        else:
+            canonical = _find_canonical_images_dir(dataset_name, dataset_path, lowres_suffix)
+            if canonical is None:
+                raise RuntimeError("[DatasetUpscalePlan] could not locate an images folder "
+                                   f"for dataset_name={dataset_name!r} "
+                                   f"dataset_path={dataset_path!r}.")
+            if lowres_suffix and canonical.endswith(lowres_suffix):
+                base = canonical[:-len(lowres_suffix)]
+                if os.path.isdir(base):
+                    canonical = base
+            low = canonical + lowres_suffix
+            load_dir = low if os.path.isdir(low) else canonical
+            names, groups = _resolve_upscale_order(marker, load_dir)
+            kind = marker.get("kind", "colmap")
+            # Pointed at a COLMAP dataset's panoramas/ folder rather than its cube faces:
+            # the marker's per-face sequences match nothing, so we get one big group. The
+            # coherent clip there is a TRAJECTORY -- use those lengths instead, otherwise
+            # frames_per_view would be the whole 324-frame set and the meta-batch would
+            # defeat its own purpose.
+            if len(groups) == 1:
+                tl = (marker.get("trajectory_lengths")
+                      or (marker.get("sfm_params") or {}).get("trajectory_lengths"))
+                if tl and sum(tl) == len(names):
+                    groups = list(tl)
+                    kind += "/panoramas"
+
+        if not groups or not names:
+            raise RuntimeError(f"[DatasetUpscalePlan] no images found for {load_dir}")
+
+        if camera_index >= 0:
+            if camera_index >= len(groups):
+                raise RuntimeError(f"[DatasetUpscalePlan] camera_index={camera_index} out "
+                                   f"of range; {len(groups)} view(s) available.")
+            groups = [groups[camera_index]]
+
+        n = max(1, int(select_every_nth))
+        if n > 1:
+            groups = [len(stride_group(list(range(g)), n, bool(drop_partial_stride)))
+                      for g in groups]
+            groups = [g for g in groups if g]
+
+        # One meta-batch chunk should be one whole view. Where views differ in length that
+        # is impossible, so fall back to their GCD -- the largest chunk that still divides
+        # every view and therefore never straddles a boundary.
+        uniform = len(set(groups)) == 1
+        per_view = groups[0]
+        for g in groups[1:]:
+            per_view = math.gcd(per_view, g)
+        batch, exact = _pick_batch_size(per_view, max_batch_size)
+
+        total = sum(groups)
+        plan = (f"kind={kind} views={len(groups)} frames={total} "
+                f"per_view={per_view} batch={batch} stride={n}")
+        print(f"[DatasetUpscalePlan] {kind}: {len(groups)} view(s), {total} frame(s)"
+              f"{f' after stride {n}' if n > 1 else ''}\n"
+              f"                     frames_per_view={per_view}"
+              f"{'' if uniform else '  (views differ in length -> GCD of ' + str(sorted(set(groups))[:6]) + ')'}"
+              f"  -> wire to Meta Batch Manager.frames_per_batch\n"
+              f"                     suggested_batch_size={batch}"
+              f"{f' (VRAM cap {max_batch_size})' if max_batch_size else ''}"
+              f"  -> wire to SeedVR2.batch_size\n"
+              f"                     {per_view // batch} full chunk(s) of {batch} per view"
+              f"{'' if per_view % batch == 0 else f' + a {per_view % batch}-frame tail, padded by uniform_batch_size'}")
+        if batch == 1 and per_view > 1:
+            print(f"[DatasetUpscalePlan] WARNING: batch_size is 1, so SeedVR2 gets NO "
+                  f"temporal context. max_batch_size={max_batch_size} is below 5 -- raise it.")
+        return (per_view, batch, len(groups), total, plan, n, bool(drop_partial_stride))
 
 
 class PrepareDatasetUpscale:
@@ -892,6 +1212,12 @@ class SaveUpscaledFramesStreaming:
                                "has its own larger COLMAP camera, so it is passed through the "
                                "model only to give it temporal context -- the generated "
                                "version is discarded and the real pixels are kept."}),
+                "job": ("STRING", {"default": "",
+                    "tooltip": "Wire Load Dataset Images (Ordered) -> job and this node needs "
+                               "NOTHING else configured: the target folder, the exact arrival "
+                               "order and the passthrough list all travel down that one link. "
+                               "It fills in out_dir / order_names / passthrough_json, and any "
+                               "of those you set explicitly still wins."}),
                 "meta_batch": ("VHS_BatchManager", {
                     "tooltip": "Wire the SAME Meta Batch Manager that drives the loader here "
                                "so this node accumulates across iterations and finalises on "
@@ -920,10 +1246,26 @@ class SaveUpscaledFramesStreaming:
 
     def save(self, images, canonical_dir="", out_suffix="_upscaled", out_dir="",
              filename_pattern="{i:05d}.png", source_names_dir="", order_names="",
-             passthrough_json="", meta_batch=None, unique_id=None, prompt=None):
+             passthrough_json="", job="", meta_batch=None, unique_id=None, prompt=None):
         import shutil
         import numpy as np
         from PIL import Image
+
+        # One link carries the whole contract from the loader. Anything set explicitly on
+        # this node still wins, so the job is a default-filler, never an override.
+        streaming_from = ""
+        if job and job.strip():
+            try:
+                j = json.loads(job)
+            except Exception as e:
+                raise RuntimeError(f"[SaveUpscaledFramesStreaming] job is not valid JSON: {e}")
+            if not out_dir.strip() and not canonical_dir.strip():
+                out_dir = j.get("canonical_dir") or ""
+            if not order_names.strip():
+                order_names = json.dumps(j.get("names") or [])
+            if not passthrough_json.strip() and j.get("passthrough"):
+                passthrough_json = json.dumps(j["passthrough"])
+            streaming_from = j.get("load_dir") or ""
 
         # Frames whose ORIGINAL file is copied through instead of the generated upscale.
         pt_dir, pt_names = "", set()
@@ -948,6 +1290,24 @@ class SaveUpscaledFramesStreaming:
             raise RuntimeError(f"[SaveUpscaledFramesStreaming] refusing to write into the "
                                f"originals folder {target}. Pick a different out_dir / "
                                f"out_suffix so the originals are preserved.")
+        # THE guard that matters: this node CLEARS its target on the first chunk, so if the
+        # target is also the folder the loader is streaming from, it deletes the frames the
+        # loop has not read yet -- the run dies part way through and the originals are gone.
+        # It is checked on its own rather than folded into the canonical_dir/source_names_dir
+        # checks below, because a `job` link fills neither of those in, which is exactly how
+        # this slipped through once already.
+        if streaming_from:
+            sf = os.path.normpath(os.path.abspath(streaming_from.strip().strip('"')))
+            if target == sf:
+                raise RuntimeError(
+                    f"[SaveUpscaledFramesStreaming] REFUSING TO WRITE: the target folder\n"
+                    f"  {target}\n"
+                    f"is the same folder the loader is streaming from. Clearing it would "
+                    f"destroy the frames not yet read.\n"
+                    f"  Fix: turn ON prepare_in_place on the loader (so it reads the "
+                    f"preserved {os.path.basename(sf)}_lowres and writes here), or point "
+                    f"out_dir somewhere else.")
+
         src_names_dir = (source_names_dir or "").strip().strip('"')
         if src_names_dir:
             src_names_dir = os.path.normpath(os.path.abspath(src_names_dir))
@@ -968,9 +1328,18 @@ class SaveUpscaledFramesStreaming:
                 if f.lower().endswith(_IMG_EXTS) and os.path.isfile(os.path.join(target, f)):
                     os.remove(os.path.join(target, f))
                     removed += 1
-            total = int(getattr(meta_batch, "total_frames", 0) or 0) if meta_batch is not None \
-                else int(images.shape[0])
-            if not total or total == float("inf"):
+            # total_frames is float('inf') until a loader narrows it -- and a loader that
+            # is NOT under the same manager (or is running whole-batch) never does. int()
+            # on inf raises OverflowError, so test finiteness BEFORE converting, not after.
+            if meta_batch is None:
+                total = int(images.shape[0])
+            else:
+                tf = getattr(meta_batch, "total_frames", None)
+                try:
+                    total = int(tf) if tf is not None and math.isfinite(float(tf)) else None
+                except (TypeError, ValueError, OverflowError):
+                    total = None
+            if not total:
                 total = None
             # Original filenames, resolved ONCE, so frame k of the loop lands back on the
             # file it was loaded from. An explicit order_names list wins: it is the only
@@ -1208,6 +1577,7 @@ class SphereSfMDatasetDualRes:
 NODE_CLASS_MAPPINGS = {
     "SplatKit_ResolveDatasetImages": ResolveDatasetImages,
     "SplatKit_LoadDatasetImagesOrdered": LoadDatasetImagesOrdered,
+    "SplatKit_DatasetUpscalePlan": DatasetUpscalePlan,
     "SplatKit_PrepareDatasetUpscale": PrepareDatasetUpscale,
     "SplatKit_SaveUpscaledDataset": SaveUpscaledDataset,
     "SplatKit_SaveUpscaledFramesStreaming": SaveUpscaledFramesStreaming,
@@ -1216,6 +1586,7 @@ NODE_CLASS_MAPPINGS = {
 NODE_DISPLAY_NAME_MAPPINGS = {
     "SplatKit_ResolveDatasetImages": "Resolve Dataset Images",
     "SplatKit_LoadDatasetImagesOrdered": "Load Dataset Images (Ordered)",
+    "SplatKit_DatasetUpscalePlan": "Dataset Upscale Plan (batch sizes, no cycle)",
     "SplatKit_PrepareDatasetUpscale": "Prepare Dataset Upscale (swap originals first)",
     "SplatKit_SaveUpscaledDataset": "Save Upscaled Dataset",
     "SplatKit_SaveUpscaledFramesStreaming": "Save Upscaled Frames (Streaming)",
