@@ -14,8 +14,10 @@ which is exactly where the renderer put them.)
 Pipeline (every step a colmap_sphere subcommand, so the new views live in the same
 spherical world as the originals):
 
-  1. copy the hires PNGs into ``_spheresfm_work/equirect`` (as ``hires_*.png``; the
-     ``frame_*.png`` numbering the equirect path relies on is left completely alone)
+  1. copy the hires PNGs into the scratch equirect dir (as ``hires_*.png``; the
+     ``frame_*.png`` numbering the equirect path relies on is left completely alone).
+     That is ``_spheresfm_work/equirect`` for a single-res dataset, or -- when the two
+     grids match -- ``equirect_hires`` for a dual-res one; see ``_resolve_equirect_dir``.
   2. ``feature_extractor`` over the new images ONLY, camera model PINHOLE, params taken
      from the renderer's own K -- so the intrinsics are exact, not estimated
   3. ``matches_importer`` over a CUSTOM pair list (every hires view against every existing
@@ -68,6 +70,61 @@ def _existing_hires(equ_dir):
     return max(idx) if idx else -1
 
 
+def _equirect_grid(d):
+    """(w, h) of the frame_*.png in ``d``, or None if there are none / it is unreadable."""
+    fr = sorted(glob.glob(os.path.join(d, "frame_*.png")))
+    if not fr:
+        return None
+    try:
+        from PIL import Image
+        with Image.open(fr[0]) as im:
+            return im.size
+    except Exception:
+        return None
+
+
+def _resolve_equirect_dir(work):
+    """Locate the scratch equirect folder this dataset's SfM actually used.
+
+    run_spheresfm stages one folder, ``equirect``. The dual-res path stages TWO --
+    ``equirect_lowres`` (what the database's keypoints were extracted from) and
+    ``equirect_hires`` (what the cube faces were reprojected from) -- see
+    spheresfm_colmap.run_spheresfm_dualres.
+
+    Growing a dual-res dataset is only sound when those two are the SAME GRID. When they
+    are, the run's ``_rescale_sphere_cameras`` was a no-op, so the model's SPHERE camera
+    still matches the database's keypoint coordinates and registration is well posed;
+    ``equirect_hires`` is then returned, because that is the source the existing faces
+    came from and the reprojector re-renders them from it in step 6.
+
+    When the grids genuinely differ, the model's camera has been rescaled to the hi-res
+    grid while the database's keypoints are still in low-res pixels. Registering against
+    that mix would place the new views by wrong rays, so this returns None rather than
+    quietly producing a broken model.
+    """
+    plain = os.path.join(work, "equirect")
+    if os.path.isdir(plain):
+        return plain
+    hi = os.path.join(work, "equirect_hires")
+    lo = os.path.join(work, "equirect_lowres")
+    if not (os.path.isdir(hi) and os.path.isdir(lo)):
+        return None
+    g_hi, g_lo = _equirect_grid(hi), _equirect_grid(lo)
+    if g_hi is not None and g_hi == g_lo:
+        print("[HiRes/add] dual-res scratch dir, but both grids are %dx%d -- the sphere "
+              "camera was never rescaled, so growing this dataset is safe. Using %s"
+              % (g_hi[0], g_hi[1], hi))
+        return hi
+    raise RuntimeError(
+        "[HiRes/add] this dataset was built by the DUAL-RES SfM path and its two scratch "
+        "grids differ (equirect_lowres %s vs equirect_hires %s).\n"
+        "The SPHERE camera in the model was rescaled to the hi-res grid while the "
+        "database's keypoints are still in low-res pixels, so registering new views "
+        "against it would solve them along the wrong rays. Rebuild the base dataset with "
+        "the SphereSfM node in mode=colmap_now (single-res) if you need to add hires "
+        "views to it." % ("%dx%d" % g_lo if g_lo else "?", "%dx%d" % g_hi if g_hi else "?"))
+
+
 def add_hires_views(frames, cam_meta, dataset_dir, exe_path="",
                     retriangulate=True, adjust_existing_cameras=False,
                     max_num_features=8192, peak_threshold=0.0066,
@@ -83,11 +140,12 @@ def add_hires_views(frames, cam_meta, dataset_dir, exe_path="",
     """
     dataset_dir = os.path.abspath(dataset_dir)
     work = os.path.join(dataset_dir, "_spheresfm_work")
-    equ = os.path.join(work, "equirect")
+    equ = _resolve_equirect_dir(work)
     db = os.path.join(work, "database.db")
     base_model = sfm._largest_sparse_model(os.path.join(work, "sparse"))
 
-    missing = [p for p in (equ, db) if not os.path.exists(p)] + \
+    missing = [p for p in (equ or os.path.join(work, "equirect"), db)
+               if not os.path.exists(p)] + \
               ([] if base_model else [os.path.join(work, "sparse", "0")])
     if missing:
         raise RuntimeError(

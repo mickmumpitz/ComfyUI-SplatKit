@@ -1136,7 +1136,58 @@ class PrepareDatasetUpscale:
 # Cross-iteration accumulator state, keyed by this node's unique_id. Each entry:
 #   {"dir": <target>, "written": <int>, "total": <int|None>}. Populated on the
 # first meta-batch iteration and popped on the last so re-runs start clean.
+#
+# "Popped on the last" only happens when the loop actually REACHES its last chunk. A run
+# that is cancelled, OOMs or raises anywhere in the graph leaves its entry behind for the
+# life of the ComfyUI process -- and since the key is just the node id, the next run of
+# ANY workflow whose saver happens to carry that id inherits it: stale target folder,
+# stale filename list, stale counter, and the clear-the-folder step skipped. Hence the
+# requeue probe below; see _meta_batch_requeue.
 _STREAM_STATE = {}
+
+
+def _meta_batch_requeue(prompt, unique_id):
+    """VHS's per-run iteration counter for the loop this node sits in, or None.
+
+    VideoHelperSuite bumps ``requeue`` on every ``VHS_BatchManager`` in the prompt each
+    time it requeues the workflow, and the field is absent (0) on the first iteration of
+    a fresh run -- ``BatchManager.update_batch`` keys its own ``reset()`` off exactly
+    that. Reading it is the only way a node INSIDE the loop can tell "iteration 1 of a
+    new run" from "iteration 1 arriving after the previous run died", which look
+    identical from the accumulator's point of view.
+
+    Returns None when the prompt is unavailable or the manager cannot be identified
+    unambiguously; callers must treat that as "don't know", not as "not first".
+    """
+    if not isinstance(prompt, dict) or unique_id is None:
+        return None
+
+    def _node(uid):
+        n = prompt.get(str(uid))
+        return n if isinstance(n, dict) else (prompt.get(uid) if isinstance(
+            prompt.get(uid), dict) else None)
+
+    bm_uid = None
+    me = _node(unique_id)
+    if me:
+        link = (me.get("inputs") or {}).get("meta_batch")
+        if isinstance(link, (list, tuple)) and link:
+            bm_uid = link[0]
+    if bm_uid is None:
+        # No usable link (older prompt shapes): fall back to the sole manager, if there
+        # is exactly one. With several, guessing could reset a healthy accumulator.
+        bms = [u for u, n in prompt.items()
+               if isinstance(n, dict) and n.get("class_type") == "VHS_BatchManager"]
+        if len(bms) != 1:
+            return None
+        bm_uid = bms[0]
+    bm = _node(bm_uid)
+    if not bm:
+        return None
+    try:
+        return int((bm.get("inputs") or {}).get("requeue", 0) or 0)
+    except (TypeError, ValueError):
+        return None
 
 
 class SaveUpscaledFramesStreaming:
@@ -1319,6 +1370,28 @@ class SaveUpscaledFramesStreaming:
                                    f"source_names_dir {target} -- that folder holds the "
                                    "pristine originals. Point out_dir somewhere else.")
 
+        # Drop state left over by a run that never reached its last chunk before deciding
+        # whether this is a first chunk -- otherwise a fresh run silently CONTINUES the
+        # dead one (see the _STREAM_STATE comment).
+        stale = _STREAM_STATE.get(unique_id)
+        if stale is not None:
+            why = None
+            if _meta_batch_requeue(prompt, unique_id) == 0:
+                why = "the meta-batch loop reports requeue=0, i.e. this is a new run"
+            elif stale.get("dir") != target:
+                # Second net for when the requeue probe returns None: a genuine
+                # continuation always writes to the folder it opened with.
+                why = f"it targets a different folder ({stale.get('dir')})"
+            elif stale.get("written", 0) >= len(stale.get("names") or ()) and stale.get("names"):
+                why = (f"it is already complete ({stale['written']} frame(s) written), so "
+                       "this must be a new run")
+            if why:
+                print("[SaveUpscaledFramesStreaming] discarding leftover accumulator state "
+                      f"from an earlier interrupted run: {why}.\n"
+                      f"                              (it had {stale.get('written', 0)} "
+                      f"frame(s) in {stale.get('dir')}). Starting fresh.")
+                _STREAM_STATE.pop(unique_id, None)
+
         first = (meta_batch is None) or (unique_id not in _STREAM_STATE)
         if first:
             os.makedirs(target, exist_ok=True)
@@ -1439,6 +1512,17 @@ class SaveUpscaledFramesStreaming:
               f"-> {st['written']}{('/' + str(tot)) if tot else ''} in {target}")
 
         last = (meta_batch is None) or bool(getattr(meta_batch, "has_closed_inputs", False))
+        # has_closed_inputs alone is NOT a reliable end-of-loop signal. On the final
+        # iteration VHS_VideoCombine drains its own outputs and then calls
+        # meta_batch.reset(), which re-runs BatchManager.__init__ and sets the flag back
+        # to False. ComfyUI does not order the two output nodes, so whenever the loop
+        # driver happens to run first this node sees False on the very chunk that
+        # completes the run: no DONE summary, and -- worse -- the accumulator entry is
+        # never popped, leaving state behind that the NEXT run has to defend against.
+        # The frame count cannot be reset out from under us, so finalise on that too.
+        expected = st.get("total") or (len(names) if names else None)
+        if expected and st["written"] >= expected:
+            last = True
         if last:
             if names is not None:
                 short = (f"  WARNING: only {st['written']} of {len(names)} originals were "
@@ -1461,23 +1545,33 @@ class SaveUpscaledFramesStreaming:
 
 
 class SphereSfMDatasetDualRes:
-    """Build a SphereSfM COLMAP dataset with SfM at LOW resolution and the trainable
-    pinhole cube faces reprojected from HIGH-resolution equirects read off disk.
+    """Build a SphereSfM COLMAP dataset from a folder of panoramas -- single-res, or with
+    SfM at LOW resolution and the trainable pinhole cube faces reprojected from
+    HIGH-resolution equirects read off disk (dual-res).
 
-    WHY: posing the scene (feature extraction + matching + mapping) does not need 8K --
-    SPHERE poses are angular, so they're resolution-independent. Doing SfM on the small
+    WHY DUAL-RES: posing the scene (feature extraction + matching + mapping) does not need
+    8K -- SPHERE poses are angular, so they're resolution-independent. Doing SfM on the small
     equirects makes EXHAUSTIVE matching (what links non-adjacent trajectories into ONE
     model) cheap, while the 8K panoramas are spent only where they matter: the pinhole
     faces LichtFeld actually trains on. The low-res model's SPHERE camera is rescaled to
     the 8K grid before reprojection samples the sharp source.
 
+    SINGLE-RES: leave hires_dir EMPTY and the faces are reprojected from the very frames
+    that were posed -- i.e. a plain SphereSfM run over any panorama folder that has no
+    COLMAP data yet. Same node, same on_split guard, same striding.
+
     INPUTS
-      * pano_frames_1..4 (IMAGE) -- the LOW-RES equirect trajectories (e.g. the raw
+      * pano_frames_1..4 (IMAGE) -- the equirect trajectories used for SfM (e.g. the raw
         1440x720 panoramas/). Concatenated in order; ~4 GB for 324 frames, so unlike the
         8K set this DOES fit in a ComfyUI tensor.
-      * hires_dir (STRING) -- folder of the matching 8K equirects (panoramas_upscaled/).
-        Read frame-by-frame from disk (never tensored -> no 122 GB OOM). Its sorted file
-        order MUST line up 1:1 with the concatenated low-res frames (same source order).
+      * hires_dir (STRING) -- OPTIONAL folder of matching hi-res equirects
+        (panoramas_upscaled/). Read frame-by-frame from disk (never tensored -> no 122 GB
+        OOM). Its sorted file order MUST line up 1:1 with the concatenated low-res frames
+        (same source order, SAME COUNT -- thin with this node's frame_stride, not the
+        loader's, so both sides are thinned identically).
+
+    frame_stride / max_frames thin the concatenated clip BEFORE SfM, and (in dual-res) pick
+    the matching hi-res files, so the two sets stay in lockstep.
 
     on_split=stop (default): if the mapper yields more than one disconnected model the node
     RAISES with the per-model frame breakdown and reprojects nothing -- so you can see the
@@ -1488,10 +1582,13 @@ class SphereSfMDatasetDualRes:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "pano_frames_1": ("IMAGE", {"tooltip": "Low-res equirect trajectory 1 (for SfM)."}),
+                "pano_frames_1": ("IMAGE", {"tooltip": "Equirect trajectory 1 (the frames SfM poses)."}),
                 "hires_dir": ("STRING", {"default": "",
-                    "tooltip": "Folder of matching 8K equirects (e.g. <dataset>/panoramas_upscaled). "
-                               "Sorted order must match the low-res frame order 1:1."}),
+                    "tooltip": "OPTIONAL folder of matching hi-res equirects (e.g. "
+                               "<dataset>/panoramas_upscaled). Sorted order AND COUNT must match "
+                               "the frames wired in above, 1:1 (thin with this node's frame_stride, "
+                               "not the loader's). LEAVE EMPTY for a plain single-res SphereSfM run "
+                               "-- the cube faces are then reprojected from the posed frames."}),
                 "output_name": ("STRING", {"default": "my_scene",
                     "tooltip": "Dataset folder under ComfyUI/output (or an absolute path)."}),
             },
@@ -1520,6 +1617,16 @@ class SphereSfMDatasetDualRes:
                 "image_order": (["camera_major", "frame_major"], {"default": "camera_major"}),
                 "hires_glob": ("STRING", {"default": "*.png",
                     "tooltip": "Glob for the hi-res files inside hires_dir."}),
+                # NOTE: keep new widgets AFTER hires_glob. ComfyUI maps widgets_values
+                # positionally, so anything inserted above shifts every saved value in
+                # graphs built before the change (2b2_sfm_from_upscaled_dualres.json).
+                "frame_stride": ("INT", {"default": 1, "min": 1, "max": 100, "step": 1,
+                    "tooltip": "Use every Nth frame for SfM. Stride HERE, not in the image "
+                               "loader: this thins the low-res frames and the matching hi-res "
+                               "files together, so the two sets stay aligned 1:1."}),
+                "max_frames": ("INT", {"default": 0, "min": 0, "max": 2000, "step": 1,
+                    "tooltip": "Cap the frame count after striding (0 = no cap). Frames are "
+                               "picked evenly across the strided clip."}),
             },
         }
 
@@ -1535,19 +1642,63 @@ class SphereSfMDatasetDualRes:
             max_num_features=8192, peak_threshold=0.0066, edge_threshold=10.0,
             max_num_matches=32768, filter_max_reproj_error=4.0, filter_min_tri_angle=1.5,
             init_min_tri_angle=4.0, init_min_num_inliers=30, init_max_forward_motion=1.0,
-            image_order="camera_major", hires_glob="*.png"):
+            image_order="camera_major", hires_glob="*.png",
+            frame_stride=1, max_frames=0):
+        import glob
+        import numpy as np
         import torch
         from ..core import spheresfm_colmap as ss
 
+        # hires_dir empty = single-res: the posed frames themselves are reprojected.
         hires_dir = (hires_dir or "").strip().strip('"')
-        if not hires_dir or not os.path.isdir(hires_dir):
+        dual = bool(hires_dir)
+        if dual and not os.path.isdir(hires_dir):
             raise RuntimeError(f"[DualResSfM] hires_dir not found: {hires_dir!r} -- point it at "
-                               "the 8K equirect folder (e.g. <dataset>/panoramas_upscaled).")
+                               "the hi-res equirect folder (e.g. <dataset>/panoramas_upscaled), "
+                               "or clear it for a single-res SphereSfM run.")
 
         batches = [b for b in (pano_frames_1, pano_frames_2, pano_frames_3, pano_frames_4)
                    if b is not None]
-        trajectory_lengths = [int(b.shape[0]) for b in batches]
+        batch_lens = [int(b.shape[0]) for b in batches]
         lowres = torch.cat(batches, dim=0) if len(batches) > 1 else batches[0]
+        n_all = int(lowres.shape[0])
+
+        # Thin the CONCATENATED clip here (not in the loader) so the hi-res files can be
+        # thinned by the same indices and the two sets stay aligned 1:1.
+        idx = list(range(0, n_all, max(1, int(frame_stride))))
+        if max_frames and len(idx) > int(max_frames):
+            sel = np.linspace(0, len(idx) - 1, int(max_frames)).round().astype(int)
+            idx = [idx[i] for i in sorted(set(sel.tolist()))]
+        if len(idx) < 3:
+            raise RuntimeError(f"[DualResSfM] only {len(idx)} frame(s) left after "
+                               f"frame_stride={frame_stride} / max_frames={max_frames}; "
+                               "SfM needs at least 3. Lower the stride or raise the cap.")
+        # Per-trajectory counts AFTER striding, so the marker can still split each cube
+        # face's sub-video at the trajectory seams.
+        cum = np.cumsum([0] + batch_lens)
+        traj_of = [int(np.searchsorted(cum, oi, side="right") - 1) for oi in idx]
+        trajectory_lengths = [sum(1 for t in traj_of if t == bi) for bi in range(len(batches))]
+
+        hires_paths = None
+        if dual:
+            hires_paths = sorted(glob.glob(os.path.join(hires_dir, hires_glob)))
+            if not hires_paths:
+                raise RuntimeError(f"[DualResSfM] no hi-res frames matched {hires_glob!r} "
+                                   f"in {hires_dir}")
+            if len(hires_paths) != n_all:
+                raise RuntimeError(
+                    f"[DualResSfM] count mismatch: {n_all} frame(s) wired in vs "
+                    f"{len(hires_paths)} file(s) matching {hires_glob!r} in {hires_dir}. Both "
+                    "sides must be the SAME set in the SAME order BEFORE striding -- set the "
+                    "image loader's select_every_nth back to 1 and thin with this node's "
+                    "frame_stride instead (it strides the hi-res files too).")
+            hires_paths = [hires_paths[i] for i in idx]
+        if len(idx) < n_all:
+            lowres = lowres[idx]
+            print(f"[DualResSfM] frame_stride={frame_stride}"
+                  + (f" / max_frames={max_frames}" if max_frames else "")
+                  + f" -> {len(idx)} of {n_all} frames used for SfM"
+                  + (" (hi-res files thinned to match)." if dual else "."))
 
         out_dir = output_name.strip().strip('"')
         if not os.path.isabs(out_dir):
@@ -1566,7 +1717,7 @@ class SphereSfMDatasetDualRes:
             init_min_num_inliers=int(init_min_num_inliers),
             init_max_forward_motion=float(init_max_forward_motion),
             image_order=image_order, trajectory_lengths=trajectory_lengths,
-            on_split=on_split, hires_glob=hires_glob)
+            on_split=on_split, hires_glob=hires_glob, hires_paths=hires_paths)
         print(f"[DualResSfM] {res['num_frames']} frames -> {res['num_images']} pinhole faces, "
               f"{res['num_points']} points ({res['num_models']} model(s)) -> {res['model_dir']}\n"
               f"  Train (pinhole, NO --gut): LichtFeld-Studio.exe -d \"{res['sparse_dir']}/..\" "

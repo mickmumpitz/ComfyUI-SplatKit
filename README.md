@@ -66,6 +66,7 @@ panorama yet.
 | `2b1_upscale_panorama_frames.json` | *Best quality, step 1 of 2.* Upscale the saved equirect panoramas frame-by-frame to 8K and stream them to disk. | `ComfyUI-VideoHelperSuite`, `ComfyUI_UltimateSDUpscale`, `ComfyUI_essentials` |
 | `2b2_sfm_from_upscaled.json` | *Step 2.* Run SphereSfM on the upscaled panoramas from `2b1`. | `ComfyUI-VideoHelperSuite` |
 | `2b2_sfm_from_upscaled_dualres.json` | Same as above, dual-res variant: SfM solves on downscaled panos, cube faces are cut from the full 8K. Cheaper solve, sharper faces. | `ComfyUI-VideoHelperSuite` |
+| `2c_spheresfm_from_panoramas.json` | Pure SphereSfM: hand it *any* panorama folder with no COLMAP data yet and it builds the dataset. Frame stride lives on the node, and filling `hires_dir` turns the same graph back into the dual-res variant. | `ComfyUI-VideoHelperSuite` |
 | `4_hires_add_to_dataset.json` | Render high-resolution pinhole views straight from the pano (no WAN) and register them into an existing dataset. | `ComfyUI-VideoHelperSuite` |
 | `_all_nodes_overview.json` | Not a pipeline — a catalogue. Every node in the pack, grouped by module, all muted so Queue does nothing. Load it to see the whole surface at once. | — |
 
@@ -87,7 +88,8 @@ them all laid out at once.
 scene point cloud), `Camera Plot Scene Reference`, `Wan I2V Masked-Video Conditioning`.
 
 **Dataset builders** (`nodes/spheresfm.py`) — `SphereSfM Dataset` (the recommended path:
-classical SfM → COLMAP), `SphereSfM Dataset (Dual-Res)`, `SphereSfM Add Camera Path`.
+classical SfM → COLMAP), `SphereSfM Dataset (Dual-Res)` (also the single-res
+panorama-folder → COLMAP path when `hires_dir` is left empty), `SphereSfM Add Camera Path`.
 
 **Upscaling** (`nodes/upscale.py`) — `Resolve Dataset Images`,
 `Load Dataset Images (Ordered)`, `Save Upscaled Dataset`, `Save Upscaled Frames (Streaming)`.

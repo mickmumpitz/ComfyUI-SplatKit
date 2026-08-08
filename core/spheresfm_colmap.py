@@ -883,12 +883,16 @@ def run_spheresfm_dualres(lowres_frames, hires_dir, out_dir, work_dir, exe_path=
                           init_min_tri_angle=4.0, init_min_num_inliers=30,
                           init_max_forward_motion=1.0,
                           image_order="camera_major", trajectory_lengths=None,
-                          on_split="stop", hires_glob="*.png"):
+                          on_split="stop", hires_glob="*.png", hires_paths=None):
     """Pose on low-res equirects, reproject pinhole faces from the hi-res equirects on disk.
 
     lowres_frames : (B,H,W,3) RGB uint8 (ndarray or any len/index/iterable sequence).
     hires_dir     : folder of hi-res equirect PNGs; sorted order MUST match lowres_frames
                     order 1:1 (frame i <-> sorted(hires)[i]). Read from disk, never tensored.
+                    EMPTY (and hires_paths=None) = SINGLE-RES: the posed frames are also the
+                    reprojection source, i.e. a plain SphereSfM run with the on_split guard.
+    hires_paths   : optional explicit, already-ordered hi-res file list, used instead of
+                    globbing hires_dir (how the node passes a STRIDED subset).
     on_split      : 'stop'    -> if the mapper yields >1 model, RAISE with the per-model
                                  frame breakdown and reproject NOTHING (default);
                     'largest' -> reproject the biggest model (legacy run_spheresfm behaviour).
@@ -899,9 +903,11 @@ def run_spheresfm_dualres(lowres_frames, hires_dir, out_dir, work_dir, exe_path=
     env = _subprocess_env(exe)
     os.makedirs(work_dir, exist_ok=True)
 
-    hires_paths = _hires_frame_paths(hires_dir, hires_glob)
+    if hires_paths is None and (hires_dir or "").strip():
+        hires_paths = _hires_frame_paths(hires_dir, hires_glob)
+    dual = bool(hires_paths)
     n_low = int(len(lowres_frames))
-    if n_low != len(hires_paths):
+    if dual and n_low != len(hires_paths):
         raise RuntimeError(
             "[dualres] count mismatch: %d low-res frames vs %d hi-res files in %s. The "
             "low-res SfM frames and hi-res reprojection frames must be the SAME set in the "
@@ -909,8 +915,11 @@ def run_spheresfm_dualres(lowres_frames, hires_dir, out_dir, work_dir, exe_path=
     if n_low < 3:
         raise RuntimeError("[dualres] need at least 3 frames for SfM.")
 
-    # --- stage LOW-RES equirects (frame_XXXXX.png) --------------------------
-    equ_low = os.path.join(work_dir, "equirect_lowres")
+    # --- stage the equirects SfM runs on (frame_XXXXX.png) ------------------
+    # Single-res stages them as 'equirect', the name run_spheresfm uses, so such a dataset
+    # can still be grown later with the 'SphereSfM Add Camera Path' node. (A dual-res
+    # dataset can't: its scratch frames are the low-res proxies, not the training source.)
+    equ_low = os.path.join(work_dir, "equirect_lowres" if dual else "equirect")
     if os.path.isdir(equ_low):
         shutil.rmtree(equ_low, ignore_errors=True)
     os.makedirs(equ_low, exist_ok=True)
@@ -925,7 +934,8 @@ def run_spheresfm_dualres(lowres_frames, hires_dir, out_dir, work_dir, exe_path=
         if lo_h is None:
             lo_h, lo_w = fr.shape[0], fr.shape[1]
         cv2.imwrite(os.path.join(equ_low, "frame_%05d.png" % i), fr[..., ::-1])  # RGB->BGR
-    print("[dualres] staged %d low-res equirects (%dx%d) -> %s" % (n_low, lo_w, lo_h, equ_low))
+    print("[dualres] staged %d %s equirects (%dx%d) -> %s"
+          % (n_low, "low-res" if dual else "SfM", lo_w, lo_h, equ_low))
 
     db = os.path.join(work_dir, "database.db")
     if os.path.isfile(db):
@@ -993,24 +1003,28 @@ def run_spheresfm_dualres(lowres_frames, hires_dir, out_dir, work_dir, exe_path=
     model = models[0]["dir"]        # single model, or largest when on_split='largest'
 
     # --- rescale the SPHERE camera to the hi-res grid, reproject from 8K -----
-    from PIL import Image as _PILImage
-    with _PILImage.open(hires_paths[0]) as im0:
-        hi_w, hi_h = im0.size
-    _rescale_sphere_cameras(model, hi_w, hi_h)
+    if dual:
+        from PIL import Image as _PILImage
+        with _PILImage.open(hires_paths[0]) as im0:
+            hi_w, hi_h = im0.size
+        _rescale_sphere_cameras(model, hi_w, hi_h)
 
-    # stage hi-res equirects as frame_XXXXX.png (hardlink -> copy fallback; no re-encode)
-    equ_hi = os.path.join(work_dir, "equirect_hires")
-    if os.path.isdir(equ_hi):
-        shutil.rmtree(equ_hi, ignore_errors=True)
-    os.makedirs(equ_hi, exist_ok=True)
-    for i, src in enumerate(hires_paths):
-        dst = os.path.join(equ_hi, "frame_%05d.png" % i)
-        try:
-            os.link(src, dst)
-        except Exception:
-            shutil.copyfile(src, dst)
-    print("[dualres] staged %d hi-res equirects (%dx%d) -> %s"
-          % (len(hires_paths), hi_w, hi_h, equ_hi))
+        # stage hi-res equirects as frame_XXXXX.png (hardlink -> copy fallback; no re-encode)
+        equ_hi = os.path.join(work_dir, "equirect_hires")
+        if os.path.isdir(equ_hi):
+            shutil.rmtree(equ_hi, ignore_errors=True)
+        os.makedirs(equ_hi, exist_ok=True)
+        for i, src in enumerate(hires_paths):
+            dst = os.path.join(equ_hi, "frame_%05d.png" % i)
+            try:
+                os.link(src, dst)
+            except Exception:
+                shutil.copyfile(src, dst)
+        print("[dualres] staged %d hi-res equirects (%dx%d) -> %s"
+              % (len(hires_paths), hi_w, hi_h, equ_hi))
+    else:
+        # single-res: the posed frames ARE the reprojection source, camera already correct
+        equ_hi, hi_w, hi_h = equ_low, lo_w, lo_h
 
     # 4) SPHERE model -> pinhole cube faces, sampled from the 8K source
     repro = ["sphere_cubic_reprojecer", "--image_path", equ_hi,
@@ -1042,7 +1056,7 @@ def run_spheresfm_dualres(lowres_frames, hires_dir, out_dir, work_dir, exe_path=
                  image_order=image_order, faces_per_frame=int(faces_per_frame),
                  num_frames=int(n_low), num_images=len(faces),
                  trajectory_lengths=[int(x) for x in (trajectory_lengths or [n_low])],
-                 sequences=sequences, dualres=True,
+                 sequences=sequences, dualres=bool(dual),
                  sfm_resolution=[int(lo_w), int(lo_h)],
                  reproject_resolution=[int(hi_w), int(hi_h)])
     print("[dualres] %d frames posed @ %dx%d -> %d pinhole faces reprojected @ %dx%d, "
