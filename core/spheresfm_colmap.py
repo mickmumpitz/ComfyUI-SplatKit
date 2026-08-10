@@ -27,6 +27,7 @@ import sys
 import re
 import glob
 import json
+import hashlib
 import shutil
 import struct
 import subprocess
@@ -304,78 +305,115 @@ def _largest_sparse_model(sparse_root):
     return best
 
 
-def run_spheresfm(frames, out_dir, work_dir, exe_path="",
-                  matcher_type="sequential", face_size=0,
-                  max_num_features=8192, peak_threshold=0.0066,
-                  edge_threshold=10.0, first_octave=0,
-                  max_num_matches=32768, filter_max_reproj_error=4.0,
-                  filter_min_tri_angle=1.5, abs_pose_min_num_inliers=30,
-                  init_min_tri_angle=4.0, init_min_num_inliers=30,
-                  init_max_forward_motion=1.0,
-                  image_order="camera_major", trajectory_lengths=None,
-                  initial_pano=None, initial_pano_mode="replace"):
-    """frames: (B,H,W,3) RGB uint8. Runs the 4-stage SphereSfM pipeline and reorganizes
-    the cubic output into a standard pinhole COLMAP dataset under out_dir. Also writes a
-    p2s_dataset.json marker recording the camera-major upscale order (see
-    _build_camera_sequences). Returns
-    {'model_dir', 'image_dir', 'sparse_dir', 'num_images', 'num_points', 'num_frames'}.
+# --------------------------------------------------------------------------------------
+# reuse_solve: skip stages 1-3 when the spherical reconstruction on disk was solved from
+# EXACTLY these frames with EXACTLY these SfM knobs.
+#
+# Stages 1-3 (features / matching / spherical bundle adjustment) depend only on the input
+# frames and the SIFT+mapper parameters. Stage 4 (sphere_cubic_reprojecer) is what
+# `face_size` controls, and `image_order` only touches the marker -- so re-running the node
+# to change either of those repeats an expensive solve that is guaranteed to produce the
+# identical model. The fingerprint below is the guard: reuse ONLY on an exact match, so a
+# reused solve is bit-identical to a fresh one (no precision trade). Anything else -- a
+# changed frame, a changed knob, a missing file -- falls back to the full solve and says why.
+_SOLVE_FINGERPRINT_NAME = "_solve_fingerprint.json"
 
-    initial_pano: optional (H,W,3) RGB uint8 pristine source pano placed at frame 0000.
-      It may be a DIFFERENT (higher) resolution than `frames`; when so it is registered as
-      its OWN SPHERE camera via a second feature_extractor pass (--image_list_path), so its
-      cube faces are reprojected from the sharp original instead of a downscaled copy.
-      mode 'replace' drops WAN's frame 0 (the pano depicts the same view); 'prepend' keeps
-      every WAN frame and puts the pano before them."""
-    exe = find_colmap_sphere(exe_path)
-    env = _subprocess_env(exe)
-    os.makedirs(work_dir, exist_ok=True)
 
-    # Coarse 4-stage progress for the node's ComfyUI bar (the per-stage detail is in
-    # the streamed console log). Best-effort: standalone use has no ComfyUI.
+def _solve_fingerprint(frames, initial_pano, initial_pano_mode, n_frames, **sfm_knobs):
+    """Everything stages 1-3 consume, hashed into a comparable dict.
+
+    The frame PIXELS are hashed (not just their count/shape) -- a same-shaped but different
+    clip must not silently inherit the previous clip's poses. hashlib takes the array's
+    buffer directly, so this reads the frames without copying them."""
+    dig = hashlib.sha256()
+    dig.update(np.ascontiguousarray(frames))
+    if initial_pano is not None:
+        dig.update(b"|initial_pano|")
+        dig.update(np.ascontiguousarray(initial_pano))
+    return {
+        "version": 1,
+        "frames_sha256": dig.hexdigest(),
+        "num_input_frames": int(len(frames)),
+        "frame_shape": [int(x) for x in frames.shape[1:]],
+        # frames actually written to equirect/ (replace drops WAN's frame 0) -- also the
+        # count we expect to still find on disk.
+        "num_written_frames": int(n_frames),
+        "initial_pano_shape": (None if initial_pano is None
+                               else [int(x) for x in initial_pano.shape]),
+        "initial_pano_mode": (initial_pano_mode if initial_pano is not None else None),
+        # face_size / image_order are deliberately ABSENT: they affect only stage 4 and the
+        # marker, which re-run every time. That omission is the whole point of the toggle.
+        "sfm": {k: (round(float(v), 6) if isinstance(v, float) else v)
+                for k, v in sorted(sfm_knobs.items())},
+    }
+
+
+def _solve_reuse_blocker(work_dir, fp):
+    """None if the solve in work_dir can be reused for fingerprint `fp`, else a short
+    human-readable reason it cannot."""
+    fp_path = os.path.join(work_dir, _SOLVE_FINGERPRINT_NAME)
+    if not os.path.isfile(fp_path):
+        return ("no fingerprint from a previous run -- reuse_solve only reuses solves this "
+                "node itself recorded")
     try:
-        from comfy.utils import ProgressBar
-        _pbar = ProgressBar(4)
-    except Exception:
-        _pbar = None
+        with open(fp_path, "r", encoding="utf-8") as f:
+            old = json.load(f)
+    except Exception as e:
+        return "fingerprint unreadable (%s)" % e
+    if old.get("version") != fp["version"]:
+        return "fingerprint written by a different node version"
+    if old.get("frames_sha256") != fp["frames_sha256"]:
+        return "the input frames changed"
+    for key, label in (("num_input_frames", "frame count"),
+                       ("frame_shape", "frame resolution"),
+                       ("initial_pano_shape", "initial_pano"),
+                       ("initial_pano_mode", "initial_pano_mode")):
+        if old.get(key) != fp[key]:
+            return "%s changed" % label
+    if old.get("sfm") != fp["sfm"]:
+        changed = sorted(k for k in set(old.get("sfm") or {}) | set(fp["sfm"])
+                         if (old.get("sfm") or {}).get(k) != fp["sfm"].get(k))
+        return "SfM settings changed (%s)" % ", ".join(changed)
 
-    def _stage_done(n):
-        if _pbar is not None:
-            _pbar.update_absolute(n, 4)
-
+    # The recorded solve must also still BE there: sphere_cubic_reprojecer reads the
+    # equirect frames and the SPHERE model off disk in stage 4.
     equ_dir = os.path.join(work_dir, "equirect")
+    if not os.path.isdir(equ_dir):
+        return "the equirect frames are gone from _spheresfm_work"
+    n_disk = len(_existing_frame_indices(equ_dir))
+    if n_disk != fp["num_written_frames"]:
+        return ("_spheresfm_work/equirect holds %d frames, expected %d"
+                % (n_disk, fp["num_written_frames"]))
+    if _largest_sparse_model(os.path.join(work_dir, "sparse")) is None:
+        return "the SPHERE sparse model is gone from _spheresfm_work"
+    return None
+
+
+def _solve_sphere_model(exe, env, wan, wan_names, pano_name, initial_pano, mixed_res,
+                        w, h, pw, ph, work_dir, equ_dir, db, sparse_root,
+                        matcher_type, max_num_features, peak_threshold, edge_threshold,
+                        first_octave, max_num_matches, filter_max_reproj_error,
+                        filter_min_tri_angle, abs_pose_min_num_inliers,
+                        init_min_tri_angle, init_min_num_inliers, init_max_forward_motion,
+                        stage_done):
+    """Stages 1-3: write the equirect frames, then features -> matching -> spherical
+    mapper. Returns the path of the largest SPHERE sparse model.
+
+    Split out of run_spheresfm so reuse_solve can skip exactly this much. Everything here
+    is a pure function of the frames + the SfM knobs -- which is what makes the fingerprint
+    a sound reuse test."""
+    # Fresh scratch: a stale equirect frame or database row would silently poison the solve.
     if os.path.isdir(equ_dir):
         shutil.rmtree(equ_dir, ignore_errors=True)
     os.makedirs(equ_dir, exist_ok=True)
-
-    # Write the equirect frames, reserving frame_00000 for the initial pano when present.
-    # 'replace' drops WAN's frame 0 (the pano stands in for it); 'prepend' keeps all WAN
-    # frames after the pano. The pano is written at its OWN (possibly higher) resolution.
-    h, w = frames.shape[1:3]
-    wan = frames
-    pano_name = None
-    if initial_pano is not None:
-        pano_name = "frame_00000.png"
-        cv2.imwrite(os.path.join(equ_dir, pano_name), initial_pano[..., ::-1])  # RGB->BGR
-        if initial_pano_mode == "replace" and len(frames) > 0:
-            wan = frames[1:]                       # pano stands in for WAN's frame 0
-    start = 1 if pano_name else 0
-    wan_names = []
-    for i, fr in enumerate(wan):
-        nm = f"frame_{start + i:05d}.png"
-        cv2.imwrite(os.path.join(equ_dir, nm), fr[..., ::-1])                  # RGB->BGR
-        wan_names.append(nm)
-    n_frames = (1 if pano_name else 0) + len(wan)
-    ph, pw = (initial_pano.shape[0], initial_pano.shape[1]) if pano_name else (h, w)
-    mixed_res = bool(pano_name) and (pw != w or ph != h)
-
-    db = os.path.join(work_dir, "database.db")
     if os.path.isfile(db):
         os.remove(db)
-    sparse_root = os.path.join(work_dir, "sparse")
     os.makedirs(sparse_root, exist_ok=True)
-    cubic_dir = os.path.join(work_dir, "cubic")
-    if os.path.isdir(cubic_dir):
-        shutil.rmtree(cubic_dir, ignore_errors=True)
+
+    if pano_name is not None:
+        cv2.imwrite(os.path.join(equ_dir, pano_name), initial_pano[..., ::-1])  # RGB->BGR
+    for fr, nm in zip(wan, wan_names):
+        cv2.imwrite(os.path.join(equ_dir, nm), fr[..., ::-1])                   # RGB->BGR
 
     sift_args = [
         "--SiftExtraction.max_num_features", str(int(max_num_features)),
@@ -409,13 +447,13 @@ def run_spheresfm(frames, out_dir, work_dir, exe_path="",
         _extract(f"1,{w/2.0:.1f},{h/2.0:.1f}", image_list=wan_names)
     else:
         _extract(f"1,{w/2.0:.1f},{h/2.0:.1f}")     # single shared camera (all same size)
-    _stage_done(1)
+    stage_done(1)
 
     # 2) matching -- sequential is right for an ordered video clip; exhaustive for stills
     matcher = "exhaustive_matcher" if matcher_type == "exhaustive" else "sequential_matcher"
     _run(exe, [matcher, "--database_path", db,
                "--SiftMatching.max_num_matches", str(int(max_num_matches))], env)
-    _stage_done(2)
+    stage_done(2)
 
     # 3) spherical mapper -- SPHERE intrinsics are fixed, so don't refine them
     _run(exe, [
@@ -437,7 +475,7 @@ def run_spheresfm(frames, out_dir, work_dir, exe_path="",
         "--Mapper.init_min_num_inliers", str(int(init_min_num_inliers)),
         "--Mapper.init_max_forward_motion", f"{init_max_forward_motion}",
     ], env)
-    _stage_done(3)
+    stage_done(3)
 
     model = _largest_sparse_model(sparse_root)
     if model is None:
@@ -445,8 +483,127 @@ def run_spheresfm(frames, out_dir, work_dir, exe_path="",
             "[SphereSfM] mapper produced no reconstruction. The clip likely lacks "
             "parallax (camera not translating) or texture for SfM to triangulate. "
             "Use a WAN trajectory with real camera MOVEMENT and enough frames.")
+    return model
+
+
+def run_spheresfm(frames, out_dir, work_dir, exe_path="",
+                  matcher_type="sequential", face_size=0,
+                  max_num_features=8192, peak_threshold=0.0066,
+                  edge_threshold=10.0, first_octave=0,
+                  max_num_matches=32768, filter_max_reproj_error=4.0,
+                  filter_min_tri_angle=1.5, abs_pose_min_num_inliers=30,
+                  init_min_tri_angle=4.0, init_min_num_inliers=30,
+                  init_max_forward_motion=1.0,
+                  image_order="camera_major", trajectory_lengths=None,
+                  initial_pano=None, initial_pano_mode="replace",
+                  reuse_solve=False):
+    """frames: (B,H,W,3) RGB uint8. Runs the 4-stage SphereSfM pipeline and reorganizes
+    the cubic output into a standard pinhole COLMAP dataset under out_dir. Also writes a
+    p2s_dataset.json marker recording the camera-major upscale order (see
+    _build_camera_sequences). Returns
+    {'model_dir', 'image_dir', 'sparse_dir', 'num_images', 'num_points', 'num_frames'}.
+
+    initial_pano: optional (H,W,3) RGB uint8 pristine source pano placed at frame 0000.
+      It may be a DIFFERENT (higher) resolution than `frames`; when so it is registered as
+      its OWN SPHERE camera via a second feature_extractor pass (--image_list_path), so its
+      cube faces are reprojected from the sharp original instead of a downscaled copy.
+      mode 'replace' drops WAN's frame 0 (the pano depicts the same view); 'prepend' keeps
+      every WAN frame and puts the pano before them.
+
+    reuse_solve: when True and work_dir already holds a solve fingerprinted to EXACTLY
+      these frames and SfM knobs, skip stages 1-3 (features / matching / mapper) and go
+      straight to the cube-face reprojection. Lets face_size / image_order be changed
+      without paying for a bundle adjustment that would return the identical model. Any
+      mismatch falls back to the full solve and prints why."""
+    exe = find_colmap_sphere(exe_path)
+    env = _subprocess_env(exe)
+    os.makedirs(work_dir, exist_ok=True)
+
+    # Coarse 4-stage progress for the node's ComfyUI bar (the per-stage detail is in
+    # the streamed console log). Best-effort: standalone use has no ComfyUI.
+    try:
+        from comfy.utils import ProgressBar
+        _pbar = ProgressBar(4)
+    except Exception:
+        _pbar = None
+
+    def _stage_done(n):
+        if _pbar is not None:
+            _pbar.update_absolute(n, 4)
+
+    equ_dir = os.path.join(work_dir, "equirect")
+    db = os.path.join(work_dir, "database.db")
+    sparse_root = os.path.join(work_dir, "sparse")
+    cubic_dir = os.path.join(work_dir, "cubic")
+
+    # Frame bookkeeping, done WITHOUT touching disk -- the marker needs these counts and
+    # names whether we re-solve or reuse. frame_00000 is reserved for the initial pano when
+    # present; 'replace' drops WAN's frame 0 (the pano stands in for it), 'prepend' keeps
+    # every WAN frame after the pano. The pano keeps its OWN (possibly higher) resolution.
+    h, w = frames.shape[1:3]
+    wan = frames
+    pano_name = None
+    if initial_pano is not None:
+        pano_name = "frame_00000.png"
+        if initial_pano_mode == "replace" and len(frames) > 0:
+            wan = frames[1:]                       # pano stands in for WAN's frame 0
+    start = 1 if pano_name else 0
+    wan_names = [f"frame_{start + i:05d}.png" for i in range(len(wan))]
+    n_frames = (1 if pano_name else 0) + len(wan)
+    ph, pw = (initial_pano.shape[0], initial_pano.shape[1]) if pano_name else (h, w)
+    mixed_res = bool(pano_name) and (pw != w or ph != h)
+
+    # Can we skip stages 1-3? Only on an exact fingerprint match (see _solve_fingerprint).
+    fingerprint = _solve_fingerprint(
+        frames, initial_pano, initial_pano_mode, n_frames,
+        matcher_type=matcher_type, max_num_features=int(max_num_features),
+        peak_threshold=float(peak_threshold), edge_threshold=float(edge_threshold),
+        first_octave=int(first_octave), max_num_matches=int(max_num_matches),
+        filter_max_reproj_error=float(filter_max_reproj_error),
+        filter_min_tri_angle=float(filter_min_tri_angle),
+        abs_pose_min_num_inliers=int(abs_pose_min_num_inliers),
+        init_min_tri_angle=float(init_min_tri_angle),
+        init_min_num_inliers=int(init_min_num_inliers),
+        init_max_forward_motion=float(init_max_forward_motion))
+    reuse = False
+    if reuse_solve:
+        blocker = _solve_reuse_blocker(work_dir, fingerprint)
+        if blocker is None:
+            reuse = True
+        else:
+            print("[SphereSfM] reuse_solve: cannot reuse the previous solve (%s) -- running "
+                  "the full pipeline." % blocker)
+
+    if reuse:
+        model = _largest_sparse_model(sparse_root)
+        print("[SphereSfM] reuse_solve: frames and SfM settings are unchanged -- reusing the "
+              "spherical reconstruction in\n  %s\n  Skipping features / matching / mapper; "
+              "re-rendering the cube faces only." % model)
+        _stage_done(3)
+    else:
+        model = _solve_sphere_model(
+            exe, env, wan=wan, wan_names=wan_names, pano_name=pano_name,
+            initial_pano=initial_pano, mixed_res=mixed_res, w=w, h=h, pw=pw, ph=ph,
+            work_dir=work_dir, equ_dir=equ_dir, db=db, sparse_root=sparse_root,
+            matcher_type=matcher_type, max_num_features=max_num_features,
+            peak_threshold=peak_threshold, edge_threshold=edge_threshold,
+            first_octave=first_octave, max_num_matches=max_num_matches,
+            filter_max_reproj_error=filter_max_reproj_error,
+            filter_min_tri_angle=filter_min_tri_angle,
+            abs_pose_min_num_inliers=abs_pose_min_num_inliers,
+            init_min_tri_angle=init_min_tri_angle,
+            init_min_num_inliers=init_min_num_inliers,
+            init_max_forward_motion=init_max_forward_motion,
+            stage_done=_stage_done)
+        # Record what this solve was made of, so a later run with only face_size /
+        # image_order changed can reuse it. Written only after the mapper succeeded.
+        with open(os.path.join(work_dir, _SOLVE_FINGERPRINT_NAME), "w",
+                  encoding="utf-8") as f:
+            json.dump(fingerprint, f, indent=2)
 
     # 4) SPHERE model -> 6 pinhole cube faces per frame (the trainable pinhole dataset)
+    if os.path.isdir(cubic_dir):
+        shutil.rmtree(cubic_dir, ignore_errors=True)
     repro = ["sphere_cubic_reprojecer", "--image_path", equ_dir,
              "--input_path", model, "--output_path", cubic_dir]
     if int(face_size) > 0:
@@ -695,6 +852,14 @@ def add_to_spheresfm(frames, dataset_dir, exe_path="",
         src = os.path.join(final_model, b)
         if os.path.isfile(src):
             shutil.copy2(src, os.path.join(base_model, b))
+
+    # The solve on disk is no longer the one the base run fingerprinted (extra frames, new
+    # poses), so drop the fingerprint -- a later reuse_solve run must re-solve rather than
+    # inherit an extended model under the base run's name. (The frame-count check in
+    # _solve_reuse_blocker would also catch this; removing the file makes it explicit.)
+    stale_fp = os.path.join(work_dir, _SOLVE_FINGERPRINT_NAME)
+    if os.path.isfile(stale_fp):
+        os.remove(stale_fp)
 
     # 6) reproject the WHOLE extended model to pinhole cube faces.
     cubic_dir = os.path.join(work_dir, "cubic_inc")

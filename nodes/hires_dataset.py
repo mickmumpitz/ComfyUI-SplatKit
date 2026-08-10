@@ -269,6 +269,17 @@ def add_hires_views(frames, cam_meta, dataset_dir, exe_path="",
         if os.path.isfile(src):
             shutil.copy2(src, os.path.join(base_model, b))
 
+    # Invalidate the base node's reuse_solve fingerprint: sparse/ now holds the EXTENDED
+    # model (hires PINHOLE views registered in), which is no longer what the base run
+    # solved. The fingerprint's frame-count check can't see this -- hires views are staged
+    # as hires_*.png, so the frame_*.png count is unchanged -- so it must be dropped here
+    # explicitly. Without this, re-running the SphereSfM node with reuse_solve would hand
+    # a model containing pinhole views to sphere_cubic_reprojecer, which would reproject
+    # them as if they were panoramas (exactly what the image_deleter step below avoids).
+    stale_fp = os.path.join(work, sfm._SOLVE_FINGERPRINT_NAME)
+    if os.path.isfile(stale_fp):
+        os.remove(stale_fp)
+
     # 6) sphere-only copy -> cube faces. The reprojector must not see the pinhole views
     # (it would reproject them as if they were panoramas).
     final_imgs = crm.read_images_binary(os.path.join(final, "images.bin"))

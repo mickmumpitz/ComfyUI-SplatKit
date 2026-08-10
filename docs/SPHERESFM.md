@@ -121,7 +121,44 @@ Only `output_name` is required; everything else is optional. The IMAGE slots
 | `initial_pano_mode` | `replace` / `prepend`, default `replace` | Only used when `initial_pano` is connected. `replace` = overwrite WAN's frame 0 with the pristine pano (same view → avoids a near-duplicate; recommended). `prepend` = keep WAN's frame 0 and insert the pano just before it (adds one frame; use if WAN's first frame already drifted). See below. |
 | `initial_pano_hires` | BOOLEAN, default `True` | Keep `initial_pano` at its **native** (higher) resolution instead of downscaling it to the WAN frame size. `True` (recommended for a hi-res pano): the pano is registered as its **own SPHERE camera** (a second `feature_extractor` pass via `--image_list_path`), so its 6 cube faces are reprojected from the sharp original — set `face_size` high to keep that detail. `False`: resize the pano down to the WAN resolution (one shared camera) — a fallback if your `colmap_sphere` build rejects the multi-camera path. |
 
-> `initial_pano_mode` / `initial_pano_hires` are deliberately the **last** widgets: ComfyUI maps `widgets_values` positionally, so appending new widgets there avoids shifting saved values in existing graphs.
+| `reuse_solve` | BOOLEAN, default `False` | Skip the SfM solve when this dataset's `_spheresfm_work/` already holds one built from **exactly** these frames and these SfM settings — only the cube faces are re-rendered. See below. |
+
+> New widgets are appended at the **end** of `optional` (currently `reuse_solve` is last): ComfyUI maps `widgets_values` positionally, so appending avoids shifting saved values in existing graphs.
+
+## Re-run without re-solving (`reuse_solve`)
+
+Stages 1–3 (feature extraction → matching → spherical bundle adjustment) depend **only** on
+the input frames and the SIFT/mapper knobs. `face_size` controls stage 4
+(`sphere_cubic_reprojecer`) and `image_order` only touches the marker — so re-running the
+node to change either of those normally repeats an expensive solve that is guaranteed to
+return the *identical* model.
+
+Turn `reuse_solve` **on** and the node reuses the existing spherical reconstruction and
+re-renders the cube faces only. **There is no precision trade**: the reused poses and sparse
+cloud are the same files on disk a fresh run would have written.
+
+It is guarded by a fingerprint (`_spheresfm_work/_solve_fingerprint.json`) recording a
+SHA-256 of the frame pixels, the `initial_pano` shape/mode, and every SIFT + mapper
+parameter. Reuse happens **only** on an exact match, and the solve must still physically be
+there (right number of `equirect/` frames + a `sparse/` model). Anything else — a changed
+frame, a different `frame_stride`, any knob nudged, a deleted scratch dir — falls back to
+the full solve and prints the reason:
+
+```
+[SphereSfM] reuse_solve: cannot reuse the previous solve (SfM settings changed
+(peak_threshold)) -- running the full pipeline.
+```
+
+Notes:
+
+- Leave it **off** for a first build (there is nothing to reuse; the toggle just costs a
+  hash). Turn it **on** when re-running the same clip.
+- `face_size` and `image_order` are deliberately **not** in the fingerprint — changing them
+  is exactly the case the toggle exists for.
+- Running **SphereSfM Add Camera Path** deletes the fingerprint: the solve on disk is no
+  longer the base run's, so the next `reuse_solve` run re-solves rather than inheriting an
+  extended model.
+- `mode = panorama_only` never solves, so the toggle does nothing there.
 
 ## Anchor frame 0000 on the pristine source panorama (`initial_pano`)
 

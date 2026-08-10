@@ -110,10 +110,10 @@ class SphereSfMDataset:
                                "left untouched either way). camera_major groups each cube face into a "
                                "coherent per-view sub-video so a temporal upscaler keeps fixed context; "
                                "frame_major keeps the plain lexical (frame-by-frame) order."}),
-                # NOTE: keep this LAST in `optional`. ComfyUI maps a node's widgets_values
-                # array positionally, so a new widget must be appended at the end or it
-                # shifts every saved value after it. (initial_pano above is an IMAGE *input*
-                # slot, not a widget, so its placement is free.)
+                # NOTE: append new widgets at the END of `optional`. ComfyUI maps a node's
+                # widgets_values array positionally, so inserting one in the middle shifts
+                # every saved value after it. (initial_pano above is an IMAGE *input* slot,
+                # not a widget, so its placement is free.)
                 "initial_pano_mode": (["replace", "prepend"], {"default": "replace",
                     "tooltip": "Only used when initial_pano is connected. replace = overwrite WAN's "
                                "frame 0 with the pristine initial pano (they depict the same view, so "
@@ -128,6 +128,17 @@ class SphereSfMDataset:
                                "that detail). OFF: resize the pano down to the WAN resolution (one shared "
                                "camera) -- use as a fallback if your colmap_sphere build rejects the "
                                "multi-camera path."}),
+                # Keep LAST in `optional` (see the positional widgets_values note above).
+                "reuse_solve": ("BOOLEAN", {"default": False,
+                    "tooltip": "Skip the SfM solve when this dataset's _spheresfm_work already "
+                               "holds one built from EXACTLY these frames and these SfM settings. "
+                               "Only the cube faces are re-rendered, so changing face_size or "
+                               "image_order costs seconds instead of a full feature/matching/"
+                               "bundle-adjustment pass. NO precision trade: the reused poses and "
+                               "sparse cloud are the identical files a fresh run would produce. If "
+                               "anything the solve depends on changed (frames, stride, initial_pano, "
+                               "any SIFT/mapper knob) it re-solves automatically and prints why. "
+                               "Leave OFF for a first build; turn ON when re-running the same clip."}),
             },
         }
 
@@ -146,7 +157,7 @@ class SphereSfMDataset:
             max_num_matches=32768, filter_max_reproj_error=4.0, filter_min_tri_angle=1.5,
             init_min_tri_angle=4.0, init_min_num_inliers=30, init_max_forward_motion=1.0,
             mode="colmap_now", image_order="camera_major", initial_pano_mode="replace",
-            initial_pano_hires=True):
+            initial_pano_hires=True, reuse_solve=False):
         import numpy as np
         import cv2
         from ..core import spheresfm_colmap as ss
@@ -261,7 +272,8 @@ class SphereSfMDataset:
             init_min_num_inliers=int(init_min_num_inliers),
             init_max_forward_motion=float(init_max_forward_motion),
             image_order=image_order, trajectory_lengths=trajectory_lengths,
-            initial_pano=ip_for_sfm, initial_pano_mode=initial_pano_mode)
+            initial_pano=ip_for_sfm, initial_pano_mode=initial_pano_mode,
+            reuse_solve=bool(reuse_solve))
         print(f"[SphereSfMDataset] {res['num_frames']} equirect frames -> "
               f"{res['num_images']} pinhole cube-face views, {res['num_points']} points -> "
               f"{res['model_dir']}\n"
