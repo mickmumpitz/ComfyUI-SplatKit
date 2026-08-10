@@ -64,11 +64,16 @@ DEFAULTS = dict(
     rho_lo=2.0,          # full confidence below this minification (src px / out px)
     rho_hi=4.0,          # zero confidence above it: the source cannot beat WAN there
     gate_ema=0.6,        # temporal smoothing of the gate
+    # hard_soft_edge | hard | soft_original -- see the gate build in run_composite
+    gate_mode="hard_soft_edge",
+    gate_edge=4.0,       # sigma of the edge fade, in OUTPUT pixels, for hard_soft_edge
     mip_levels=5,        # mip pyramid depth for anti-aliased texture sampling
     chunk=10,            # frames per render call
     tone_sigma=96.0,     # geometry mode: hole-fill tone-match scale (output px)
     tone_clamp=2.0,      # max gain applied to WAN when tone matching
     tone_work=1024,      # width the tone gain is evaluated at (0 = full output width)
+    tone_floor=1e-3,     # valid-support below which the tone gain falls back frame-wide
+    tone_mode="luma",    # luma | rgb | off -- what the hole-fill gain is measured on
     low_sigma=24.0,      # wan mode: frequency-split scale at output resolution
     veto_zncc=0.15,      # wan mode: structural disagreement veto
     detail_gain=3.0,     # wan mode: max texture amplification over WAN's structure
@@ -256,11 +261,53 @@ def _decode_uv(img, k):
     return ((n + p) / k).astype(np.float32)
 
 
+_DEBUG_README = """\
+HiRes Composite -- what went into each frame
+============================================
+Every folder here holds the SAME frames as ../frames/, under the SAME filenames, at
+{w}x{h}. Open one filename across the folders to see that frame taken apart.
+
+The whole composite is just this, per pixel:
+
+    frames/  =  gate * source  +  (1 - gate) * wan_fill
+
+source/        The original high-res panorama, reprojected into this camera view.
+               This is the good stuff -- real photograph, not generated.
+gate/          White where the panorama could explain the pixel, black where it could
+               not (something was hidden from the panorama's viewpoint, so there is a
+               hole). Grey is the soft edge between them.
+wan_raw/       The WAN video frame as generated, at its own small size.
+wan_upscaled/  wan_raw after the upscale model, blown up to the output size.
+wan_fill/      wan_upscaled after brightness/colour matching -- what actually goes into
+               the black parts of the gate.
+{extra}
+How to read it
+--------------
+If a region looks soft or wrong, check gate/ first.
+  Black there  -> it came from WAN. Compare wan_raw / wan_upscaled / wan_fill to see
+                  which step lost it. WAN is far smaller than the output, so a big
+                  black area is always softer than its surroundings.
+  White there  -> it came from the panorama. Softness then means the panorama was
+                  sampled at a steep angle, or the depth was wrong there.
+"""
+
+
+def _write_debug_readme(dbg_root, base_mode, out_w, out_h):
+    extra = ("" if base_mode == "geometry" else
+             "\nNOTE: base_mode is 'wan', so source/ is the WAN frame with panorama "
+             "detail\n      injected on top, not the panorama on its own.\n")
+    try:
+        with open(os.path.join(dbg_root, "README.txt"), "w", encoding="utf-8") as f:
+            f.write(_DEBUG_README.format(w=out_w, h=out_h, extra=extra))
+    except OSError as e:                          # a dump is never worth failing a run
+        print(f"[HiResComposite] could not write debug README ({e})")
+
+
 def run_composite(src_hi, pano_geo, rail, out_dir, wan=None, out_w=8192,
                   base_mode="geometry", frames_spec="all", depth=None,
                   upscale=None, proxy_width=2048, name_prefix="", device="cuda",
                   moge_kwargs=None, params=None, log=print, progress=None,
-                  depth_grid="geometry_res", prefetch=True):
+                  depth_grid="geometry_res", prefetch=True, debug_save="off"):
     """Composite one trajectory. Writes hi-res PNGs; returns proxies + a report.
 
     src_hi     : [H, W, 3] uint8 -- the ORIGINAL high-resolution panorama (8K).
@@ -273,6 +320,12 @@ def run_composite(src_hi, pano_geo, rail, out_dir, wan=None, out_w=8192,
                  from the source instead of filled with generated content).
     depth      : optional precomputed [h, w] float32 equirect depth; else MoGe runs.
     upscale    : callable(uint8 HxWx3) -> uint8, or None (bicubic).
+    debug_save : which intermediate stages of the hole fill to also write to disk, under
+                 ``out_dir/debug/``. "off", "wan", "wan+upscaled" or "wan+upscaled+fill".
+                 The composite alone cannot tell you WHERE softness came from -- the WAN
+                 clip, the upscaler, or the tone match -- because only the blend survives.
+                 These dumps are the same frame at each stage, named identically to
+                 frames/, so they diff directly.
     """
     import cv2
     import torch
@@ -384,10 +437,32 @@ def run_composite(src_hi, pano_geo, rail, out_dir, wan=None, out_w=8192,
     proxy_dir = os.path.join(out_dir, "proxies")
     os.makedirs(frames_dir, exist_ok=True)
     os.makedirs(proxy_dir, exist_ok=True)
+
+    # debug/ holds the layers the composite is built from, BEFORE they are blended away.
+    # Same filenames as frames/, so any two layers diff pixel-for-pixel and
+    #     frame = gate * source + (1 - gate) * wan_fill
+    # reproduces frames/ exactly. Without this the only thing on disk is the blend, and a
+    # soft or discoloured region gives you no way to tell which input it came from.
+    dbg = str(debug_save or "off").lower()
+    LAYERS = {"wan": ["wan_raw"],
+              "all": ["source", "gate", "wan_raw", "wan_upscaled", "wan_fill"]}
+    dbg_dirs = {}
+    for nm in LAYERS.get(dbg, []):
+        if nm.startswith("wan") and wan is None:
+            continue                             # nothing generated to dump
+        dbg_dirs[nm] = os.path.join(out_dir, "debug", nm)
+        os.makedirs(dbg_dirs[nm], exist_ok=True)
+    if dbg_dirs:
+        _write_debug_readme(os.path.join(out_dir, "debug"), base_mode, out_w, out_h)
+        log(f"[HiResComposite] debug_save={dbg} -> {os.path.join(out_dir, 'debug')} "
+            f"({', '.join(dbg_dirs)})")
+    elif dbg != "off":
+        log(f"[HiResComposite] debug_save={dbg!r} is not a known setting -- nothing dumped.")
+
     # Clear only THIS trajectory's files: several trajectories share the folders so the
     # sorted order across all of them is the concatenation order SfM expects.
     stale = 0
-    for d in (frames_dir, proxy_dir):
+    for d in (frames_dir, proxy_dir, *dbg_dirs.values()):
         for f in os.listdir(d):
             if f.startswith(name_prefix) and f.lower().endswith(".png"):
                 os.remove(os.path.join(d, f))
@@ -425,6 +500,20 @@ def run_composite(src_hi, pano_geo, rail, out_dir, wan=None, out_w=8192,
         v_c, _ = render_chunk(v_enc, idxs)
         return rgb_c, m_c, u_c, v_c
 
+    # The gate decides, per pixel, photo or WAN. Three ways to shape it:
+    #   soft_original    -- the research project's gate, untouched: the boundary is
+    #                       feathered AND the whole gate is carried over between frames,
+    #                       so large AREAS end up part-photo/part-WAN. That sounds
+    #                       harmless but the photo side is a stretched smear wherever
+    #                       geometry ran out, so those areas wash smear over clean WAN
+    #                       (measured ~21% of it across a long-travel rail's holes).
+    #   hard             -- cut at 0.5. Every pixel is one source or the other.
+    #   hard_soft_edge   -- cut at 0.5, then fade ONLY the boundary by a few output
+    #                       pixels. Kills the smear wash like `hard` does, without the
+    #                       stair-stepped join. This is the default.
+    gate_mode = str(P.get("gate_mode", "hard_soft_edge")).lower()
+    hard_gate = gate_mode != "soft_original"
+    edge_sig = float(P.get("gate_edge", 4.0)) if gate_mode == "hard_soft_edge" else 0.0
     gate_prev = None
     cover, manifest, proxies, gates = [], [], [], []
     pw = max(64, int(proxy_width))
@@ -440,6 +529,7 @@ def run_composite(src_hi, pano_geo, rail, out_dir, wan=None, out_w=8192,
                   else ((c, render_all(c)) for c in chunks))
         for idxs, (rgb_c, m_c, u_c, v_c) in source:
             for k, fi in enumerate(idxs):
+                fname = f"{name_prefix}{fi:04d}.png"
                 u = _decode_uv(u_c[k], k_uv)
                 v = _decode_uv(v_c[k], k_uv)
 
@@ -458,12 +548,31 @@ def run_composite(src_hi, pano_geo, rail, out_dir, wan=None, out_w=8192,
                 # --- the base WAN frame, at output resolution -----------------
                 if wan is not None:
                     base = wan[fi]
+                    raw_w = base.shape[1]
                     if upscale is not None and base.shape[1] < out_w:
                         base = upscale(base)
                     wan_up = (base if base.shape[1] == out_w else cv2.resize(
                         base, (out_w, out_h),
                         interpolation=cv2.INTER_AREA if base.shape[1] > out_w
                         else cv2.INTER_CUBIC))
+                    if not manifest:
+                        # The single most common cause of a soft hole fill is the
+                        # upscaler not being wired, which is otherwise invisible: the
+                        # composite looks identical apart from being blurrier. Say what
+                        # the fill actually went through, once.
+                        via = (f"upscaler -> {base.shape[1]}x{base.shape[0]} -> "
+                               f"{'INTER_CUBIC' if base.shape[1] < out_w else 'INTER_AREA'}"
+                               if upscale is not None else
+                               "NO UPSCALE MODEL WIRED -> INTER_CUBIC")
+                        log(f"[HiResComposite] hole fill: WAN {raw_w}x{wan[fi].shape[0]} "
+                            f"-> {via} -> {out_w}x{out_h}"
+                            + ("" if upscale is not None else
+                               f"  <-- a {out_w / raw_w:.1f}x bicubic stretch; wire an "
+                               f"upscale_model (4x-UltraSharp) if the holes look mushy."))
+                    if "wan_raw" in dbg_dirs:
+                        writer.save(os.path.join(dbg_dirs["wan_raw"], fname), wan[fi])
+                    if "wan_upscaled" in dbg_dirs:
+                        writer.save(os.path.join(dbg_dirs["wan_upscaled"], fname), wan_up)
                 else:
                     wan_up = None
 
@@ -531,10 +640,32 @@ def run_composite(src_hi, pano_geo, rail, out_dir, wan=None, out_w=8192,
                         gate_t = torch.nn.functional.interpolate(
                             torch.from_numpy(gf).to(device)[None, None],
                             size=(out_h, out_w), mode="bilinear", align_corners=False)
+                        # Cut AFTER the upsample: thresholding the geometry-res gate and
+                        # then interpolating would put the fractions straight back in.
+                        if hard_gate:
+                            gate_t = (gate_t > 0.5).to(gate_t.dtype)
+                            if edge_sig > 0:
+                                # Only the boundary softens: a few output pixels either
+                                # side. Everything further in stays exactly 0 or 1, so no
+                                # area can be a part-mix.
+                                ek, ekn = _gauss1d(torch, cv2, edge_sig, gate_t.device)
+                                gate_t = _blur_t(torch, ek, ekn, gate_t)
                         fill_t = None if wan_up is None else torch.from_numpy(
                             np.ascontiguousarray(wan_up)).to(device).permute(2, 0, 1)[None].float()
                         fill_t = _tone_fill_gpu(torch, cv2, hi_t, fill_t, gate_t,
                                                 out_w, out_h, P)
+                        if "source" in dbg_dirs:
+                            writer.save(os.path.join(dbg_dirs["source"], fname),
+                                        hi_t.clamp(0, 255).to(torch.uint8)[0]
+                                        .permute(1, 2, 0).cpu().numpy())
+                        if "gate" in dbg_dirs:
+                            writer.save(os.path.join(dbg_dirs["gate"], fname),
+                                        (gate_t.clamp(0, 1) * 255).to(torch.uint8)[0, 0]
+                                        .cpu().numpy())
+                        if "wan_fill" in dbg_dirs:
+                            writer.save(os.path.join(dbg_dirs["wan_fill"], fname),
+                                        fill_t.clamp(0, 255).to(torch.uint8)[0]
+                                        .permute(1, 2, 0).cpu().numpy())
                         comp_t = (gate_t * hi_t + (1 - gate_t) * fill_t).clamp(0, 255)
                         comp = comp_t.to(torch.uint8)[0].permute(1, 2, 0).cpu().numpy()
                         gate_small = torch.nn.functional.interpolate(
@@ -547,6 +678,17 @@ def run_composite(src_hi, pano_geo, rail, out_dir, wan=None, out_w=8192,
                     fused = _wan_fuse(cv2, np, hi, wan_up, P)
                     gate = cv2.resize(gf, (out_w, out_h),
                                       interpolation=cv2.INTER_LINEAR)[..., None]
+                    if hard_gate:
+                        gate = (gate > 0.5).astype(np.float32)
+                        if edge_sig > 0:
+                            gate = cv2.GaussianBlur(gate[..., 0], (0, 0),
+                                                    edge_sig)[..., None]
+                    if "source" in dbg_dirs:     # here the source side is the FUSED image
+                        writer.save(os.path.join(dbg_dirs["source"], fname),
+                                    np.clip(fused, 0, 255).astype(np.uint8))
+                    if "gate" in dbg_dirs:
+                        writer.save(os.path.join(dbg_dirs["gate"], fname),
+                                    (np.clip(gate[..., 0], 0, 1) * 255).astype(np.uint8))
                     comp = np.clip(gate * fused + (1 - gate) * wan_up.astype(np.float32),
                                    0, 255).astype(np.uint8)
                     gate_small = cv2.resize(
@@ -557,7 +699,6 @@ def run_composite(src_hi, pano_geo, rail, out_dir, wan=None, out_w=8192,
                 # --- outputs ---------------------------------------------------
                 # Encoding is handed to a writer thread: PNG is single-threaded zlib and
                 # was a third of the per-frame budget with the GPU idle throughout.
-                fname = f"{name_prefix}{fi:04d}.png"
                 writer.save(os.path.join(frames_dir, fname), comp)
                 manifest.append({"frame": int(fi), "file": f"frames/{fname}",
                                  "coverage": round(float(cover[-1]), 4),
@@ -591,6 +732,7 @@ def run_composite(src_hi, pano_geo, rail, out_dir, wan=None, out_w=8192,
     return {
         "frames_dir": frames_dir,
         "proxy_dir": proxy_dir,
+        "debug_dirs": dbg_dirs,
         "manifest": man_path,
         "proxies": np.stack(proxies),
         "gates": np.stack(gates),
@@ -645,15 +787,52 @@ def _tone_fill_gpu(torch, cv2, hi_t, fill_t, gate_t, out_w, out_h, P):
     rs = lambda a: F.interpolate(a, size=(th, tw), mode="area")            # noqa: E731
 
     ms = rs(gate_t.clamp(0, 1))
-    wsum = _blur_t(torch, kern, k, ms) + 1e-3
-    lo_s = _blur_t(torch, kern, k, rs(hi_t) * ms) / wsum
+    # `w` is the valid-pixel weight within reach of the sigma. cv2's kernel is TRUNCATED
+    # at ~4 sigma, so past ~8*tone_sigma of hole (768 output px at the defaults) the
+    # support is not small, it is exactly ZERO -- and then every normalised estimate
+    # below is a literal 0/0. Left alone the ratio lands on the clamp FLOOR and halves
+    # the fill's brightness, i.e. a dark low-contrast blotch with a soft ramp over most
+    # of the disoccluded area on any long-travel rail. `trust` fades the local estimate
+    # into a frame-wide one, which is a real measurement rather than a magic constant,
+    # so the exact threshold barely matters and small holes are untouched.
+    w = _blur_t(torch, kern, k, ms)
+    trust = (w / (w + float(P.get("tone_floor", 1e-3)))).clamp(0, 1)
+    area = ms.sum(dim=(2, 3), keepdim=True).clamp_min(1e-6)
+    wsum = w + 1e-3
+
     if fill_t is None:
         # No WAN frame: extrapolate the SOURCE into the holes instead. Seamless, but it
-        # invents nothing, so large disocclusions read as smeared.
+        # invents nothing, so large disocclusions read as smeared -- and out of reach it
+        # decays to BLACK. Fall back to the frame's valid mean: flat scene tone reads as
+        # a soft area, black reads as a hole.
+        lo_s = _blur_t(torch, kern, k, rs(hi_t) * ms) / wsum
+        lo_s = trust * lo_s + (1 - trust) * ((rs(hi_t) * ms).sum(dim=(2, 3), keepdim=True) / area)
         return F.interpolate(lo_s, size=(out_h, out_w), mode="bilinear", align_corners=False)
-    lo_w = _blur_t(torch, kern, k, rs(fill_t) * ms) / wsum
+
+    mode = str(P.get("tone_mode", "luma")).lower()
+    if mode == "off":
+        return fill_t
+    if mode == "luma":
+        # ONE gain from brightness, applied to all three channels. A per-channel gain is
+        # a ratio against whatever surrounds the hole, so it rewrites HUE as well as
+        # exposure: a patch of sky ringed by foliage gets its blue pulled down and comes
+        # out olive. Measured on the garden rail, per-channel suppressed blue 14% harder
+        # than red across the holes. Exposure drift is achromatic, so measuring it on
+        # luma fixes the seam and leaves WAN's colour alone.
+        lw = torch.tensor([0.299, 0.587, 0.114], device=hi_t.device).view(1, 3, 1, 1)
+        s_t = (rs(hi_t) * lw).sum(1, keepdim=True)
+        f_t = (rs(fill_t) * lw).sum(1, keepdim=True)
+    else:                                        # "rgb": the reference implementation
+        s_t, f_t = rs(hi_t), rs(fill_t)
+
+    lo_s = _blur_t(torch, kern, k, s_t * ms) / wsum
+    lo_w = _blur_t(torch, kern, k, f_t * ms) / wsum
     clamp = float(P["tone_clamp"])
+    # Out of reach, use the ratio measured over the WHOLE valid region instead.
+    dc = (((s_t * ms).sum(dim=(2, 3), keepdim=True) / area)
+          / (((f_t * ms).sum(dim=(2, 3), keepdim=True) / area) + 1e-3))
     gain = (lo_s / (lo_w + 1e-3)).clamp(1.0 / clamp, clamp)
+    gain = trust * gain + (1.0 - trust) * dc.clamp(1.0 / clamp, clamp)
     return fill_t * F.interpolate(gain, size=(out_h, out_w), mode="bilinear",
                                   align_corners=False)
 
@@ -831,17 +1010,38 @@ def _tone_matched_fill(cv2, np, hi, wan_up, gate, out_w, out_h, P):
     sg = max(1.0, float(P["tone_sigma"]) * tw / out_w)
     rs = lambda a: cv2.resize(a, (tw, th), interpolation=cv2.INTER_AREA)  # noqa: E731
     ms = rs(m3[..., 0])[..., None]
-    wsum = cv2.GaussianBlur(ms[..., 0], (0, 0), sg)[..., None] + 1e-3
-    lo_s = cv2.GaussianBlur(rs(hi) * ms, (0, 0), sg) / wsum
+    # See _tone_fill_gpu: past the kernel's truncation every estimate here is a literal
+    # 0/0, so keep a `trust` weight and fade to a frame-wide measurement rather than let
+    # the ratio hit the clamp floor.
+    w = cv2.GaussianBlur(ms[..., 0], (0, 0), sg)[..., None]
+    trust = np.clip(w / (w + float(P.get("tone_floor", 1e-3))), 0, 1)
+    area = max(float(ms.sum()), 1e-6)
+    wsum = w + 1e-3
 
     if wan_up is None:
+        lo_s = cv2.GaussianBlur(rs(hi) * ms, (0, 0), sg) / wsum
+        lo_s = trust * lo_s + (1 - trust) * ((rs(hi) * ms).sum((0, 1)) / area)
         return cv2.resize(lo_s, (out_w, out_h), interpolation=cv2.INTER_LINEAR)
 
     fill = wan_up.astype(np.float32)
-    lo_w = cv2.GaussianBlur(rs(fill) * ms, (0, 0), sg) / wsum
+    mode = str(P.get("tone_mode", "luma")).lower()
+    if mode == "off":
+        return fill
+    if mode == "luma":                           # see _tone_fill_gpu: hue-preserving
+        lw = np.array([0.299, 0.587, 0.114], np.float32)
+        s_t = (rs(hi) * lw).sum(2)[..., None]
+        f_t = (rs(fill) * lw).sum(2)[..., None]
+    else:                                        # "rgb": the reference implementation
+        s_t, f_t = rs(hi), rs(fill)
+
+    lo_s = cv2.GaussianBlur(s_t * ms, (0, 0), sg).reshape(s_t.shape) / wsum
+    lo_w = cv2.GaussianBlur(f_t * ms, (0, 0), sg).reshape(f_t.shape) / wsum
     clamp = float(P["tone_clamp"])
+    dc = ((s_t * ms).sum((0, 1)) / area) / (((f_t * ms).sum((0, 1)) / area) + 1e-3)
     gain = np.clip(lo_s / (lo_w + 1e-3), 1.0 / clamp, clamp)
-    return fill * cv2.resize(gain, (out_w, out_h), interpolation=cv2.INTER_LINEAR)
+    gain = trust * gain + (1.0 - trust) * np.clip(dc, 1.0 / clamp, clamp)
+    gain = cv2.resize(gain, (out_w, out_h), interpolation=cv2.INTER_LINEAR)
+    return fill * (gain[..., None] if gain.ndim == 2 else gain)
 
 
 def _wan_align(torch, cv2, raft, wan_f, rgb_c, m_c, u, v, H, W, fh, fw, device, gs, veto):

@@ -164,6 +164,36 @@ drops the source above `rho_hi` source-pixels-per-output-pixel, because there it
 longer beat WAN — so an 8192 source into a 2048 output is rho 4.0 and rejected across the
 whole frame. The node warns before it starts and again at the end.
 
+## `debug_save` — when the holes look soft
+
+The composite is the only thing that reaches disk, so a soft hole gives you no way to tell
+*which* stage lost the detail. `debug_save` writes the fill's intermediate stages into
+`<set_name>/debug/`, named exactly like `frames/` so any two diff pixel-for-pixel:
+
+| folder | what it is |
+|---|---|
+| `wan_raw/` | the WAN frame as generated (e.g. 1440x720). Small. |
+| `wan_upscaled/` | after `upscale_model`, resized to `output_width`. |
+| `wan_fill/` | after tone matching — what actually lands in the holes. |
+
+The last two are full-size PNGs (~40-50 MB each), so pair them with a short `frames` spec.
+
+The node also logs the resolution chain once per run, which is the fastest way to catch an
+unwired upscaler — otherwise invisible, since the composite looks identical apart from
+being blurrier:
+
+```
+[HiResComposite] hole fill: WAN 1440x720 -> upscaler -> 5760x2880 -> INTER_CUBIC -> 8192x4096
+```
+
+To check the upscaler is contributing, compare `wan_upscaled/` against a plain bicubic of
+`wan_raw/`: measured on the garden scene, 4x-UltraSharp carries **7x** the detail of
+bicubic at the same size. If that ratio is 1.0, the model is not wired.
+
+Note that even a working upscaler cannot make a 1440x720 fill match an 8192 source — it is
+a 5.7x stretch. The hole region measures ~1.7x softer than the source region at equal
+coverage, so the real lever is **coverage**, not the upscaler: see Known limits.
+
 ## Costs
 
 Measured on an RTX 5090, geometry mode, 8192 wide: **3.6 s/frame** steady state, peak ~11 GB
@@ -259,6 +289,16 @@ depth map, so extra trajectories are more views of the same geometry — *no cam
 a mirror*. They DO buy a larger explorable volume (measured: six paths reach 1.12 from the
 anchor against 0.80), which is worth having on its own terms; just don't expect the held-out
 numbers to move.
+
+**The hole fill is capped by WAN's resolution, so coverage is the lever.** WAN runs at
+1440x720 and the composite is 8192x4096, so every hole pixel is a 5.7x stretch no upscaler
+can undo — measured ~1.7x less edge energy than the source-covered part of the same frame.
+Coverage therefore decides how much of the frame is affected, and it *decays along the
+rail* as the camera leaves the anchor: on a long garden path it went 0.85 (frame 0) to 0.49
+(frame 80), with a single 2523 px-wide hole in the worst frame. A uniform `frames` spec like
+`0-80/2` spends half the budget on the worst end; `0-31,32-/4` weights the frames the source
+can actually explain and lifts mean coverage by ~0.1 for the same frame count. Shorter
+travel per rail plus more rails beats one long rail.
 
 **Only what the panorama saw can be recovered.** Anything occluded from the anchor is
 occluded in every reprojection. WAN's invention in the holes is the only remaining

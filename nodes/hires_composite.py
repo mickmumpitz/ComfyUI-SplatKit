@@ -237,6 +237,48 @@ class HiResComposite:
                     "tooltip": "Also write composite.mp4 next to the frames (h264, crf 14). "
                                "Handy for eyeballing temporal stability; irrelevant to the "
                                "dataset."}),
+                "debug_save": (["off", "wan", "all"], {"default": "off",
+                    "tooltip": "Write the layers each frame is built from into "
+                               "<set_name>/debug/, under the same filenames as frames/, "
+                               "plus a README explaining them. Only the finished blend "
+                               "normally reaches disk, so a soft or discoloured region "
+                               "gives you no way to tell which input it came from. "
+                               "'all' writes: source (the panorama reprojected into this "
+                               "view), gate (white = panorama, black = hole filled by "
+                               "WAN), and the WAN frame raw / upscaled / tone-matched -- "
+                               "together they reproduce the frame exactly. 'wan' writes "
+                               "only the raw WAN frame, which is small. 'all' is five "
+                               "full-size PNGs per frame (~40 MB each), so pair it with a "
+                               "short frames spec."}),
+                "gate_mode": (["hard_soft_edge", "hard", "soft_original"],
+                    {"default": "hard_soft_edge",
+                    "tooltip": "How the panorama/WAN decision is shaped. "
+                               "hard_soft_edge (default): every pixel is EITHER the "
+                               "panorama OR the WAN fill, with only the boundary itself "
+                               "faded over a few pixels so the join does not stair-step. "
+                               "hard: the same, with no fade at all. soft_original: the "
+                               "research project's gate untouched -- the boundary is "
+                               "feathered AND the decision is carried over between "
+                               "frames, so whole AREAS sit at part-panorama/part-WAN. "
+                               "The panorama side is a stretched smear wherever geometry "
+                               "ran out, so those areas wash smear over otherwise clean "
+                               "WAN: measured ~21% of it across the disoccluded parts of "
+                               "a long-travel rail, against ~2% either other way. Use "
+                               "soft_original only to reproduce old numbers."}),
+                "tone_mode": (["luma", "rgb", "off"], {"default": "luma",
+                    "tooltip": "How the hole fill is matched to the surrounding "
+                               "photograph. WAN's exposure drifts frame to frame and the "
+                               "source's does not, so a raw paste seams; this is the "
+                               "correction. luma (default): measure the correction on "
+                               "BRIGHTNESS only and apply it to all three channels -- "
+                               "fixes the seam and leaves WAN's colour untouched. rgb: "
+                               "measure it per channel, which is the research "
+                               "implementation, but a per-channel ratio rewrites HUE as "
+                               "well: a patch of sky ringed by foliage has its blue "
+                               "pulled down and comes out olive (measured 14% harder on "
+                               "blue than red across the garden rail's holes). Use rgb "
+                               "only to reproduce reference numbers. off: paste WAN "
+                               "unmodified and accept the seams."}),
                 "moge_model": ("MOGE_MODEL", {
                     "tooltip": "Optional pre-loaded MoGe model (MoGe Model Loader). Note "
                                "depth is cached on the panorama + params anyway, so wiring "
@@ -254,7 +296,8 @@ class HiResComposite:
             output_width, base_mode, wan_frames=None, upscale_model=None,
             frames="all", proxy_width=2048, geom_scale=2, moge_level=6, merge_long=1440,
             depth_grid="geometry_res", moge_ckpt=_MOGE_AUTO, rho_hi=4.0, tone_work=1024,
-            prefetch=True, save_video=False, moge_model=None):
+            prefetch=True, save_video=False, debug_save="off", gate_mode="hard_soft_edge",
+            tone_mode="luma", moge_model=None):
         import time
 
         from ..core import hires_composite as hc
@@ -290,8 +333,9 @@ class HiResComposite:
             name_prefix=f"traj{int(traj_index):02d}_frame_", device=dev,
             moge_kwargs=moge_kwargs, depth_grid=depth_grid, prefetch=bool(prefetch),
             params=dict(geom_scale=int(geom_scale), rho_hi=float(rho_hi),
-                        tone_work=int(tone_work)),
-            progress=progress)
+                        tone_work=int(tone_work), tone_mode=tone_mode,
+                        gate_mode=gate_mode),
+            debug_save=debug_save, progress=progress)
         dt = time.perf_counter() - t0
 
         if save_video:
@@ -306,7 +350,8 @@ class HiResComposite:
             f"(fraction of each frame taken from the source, not WAN)\n"
             f"{dt:.0f}s total, {dt / max(res['num_frames'], 1):.1f}s/frame\n"
             f"hires  -> {res['frames_dir']}\n"
-            f"proxies-> {res['proxy_dir']}")
+            f"proxies-> {res['proxy_dir']}"
+            + "".join(f"\n{k:<7}-> {v}" for k, v in res.get("debug_dirs", {}).items()))
         print("[HiResComposite] " + report.replace("\n", "\n[HiResComposite] "))
         print("[HiResComposite] next: run 4b_hires_composite_to_dataset -- load the "
               "proxies/ folder, point hires_dir at frames/ -- then train with "
