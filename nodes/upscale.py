@@ -1659,6 +1659,23 @@ class SphereSfMDatasetDualRes:
 
         batches = [b for b in (pano_frames_1, pano_frames_2, pano_frames_3, pano_frames_4)
                    if b is not None]
+        # A BYPASSED upstream node (ctrl+B) forwards its own IMAGE input straight to its
+        # output, so an unused trajectory slot silently carries e.g. the 8K source panorama
+        # instead of that trajectory's proxies. Catch the size clash here rather than in
+        # torch.cat, which reports it as a bare tensor-shape error after the expensive
+        # upstream work has already run.
+        shapes = [tuple(int(x) for x in b.shape[1:3]) for b in batches]
+        if len(set(shapes)) > 1:
+            listing = ", ".join(f"pano_frames_{i + 1}={s[1]}x{s[0]}"
+                                for i, s in enumerate(shapes))
+            raise RuntimeError(
+                f"[DualResSfM] the wired trajectories are not the same size: {listing}. "
+                "All of them must be the same resolution to be concatenated. If you are "
+                "running fewer trajectories than there are inputs, DISCONNECT the unused "
+                "pano_frames_* links -- do not bypass (ctrl+B) the upstream node: a "
+                "bypassed node passes its own image input through, so the slot ends up "
+                "carrying the source panorama. Muting (ctrl+M) the whole unused branch "
+                "also works.")
         batch_lens = [int(b.shape[0]) for b in batches]
         lowres = torch.cat(batches, dim=0) if len(batches) > 1 else batches[0]
         n_all = int(lowres.shape[0])

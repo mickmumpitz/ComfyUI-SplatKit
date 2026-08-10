@@ -1,0 +1,350 @@
+"""HiRes Composite: put the ORIGINAL panorama's texture back into a WAN fly-through.
+
+The ComfyUI layer over ``core/hires_composite.py``. See that module's docstring for
+what the composite does and why; this file only unpacks tensors and writes files.
+
+Where it sits in the pipeline::
+
+    8K panorama ──────────────────────────────────────┐ (texture)
+                                                       │
+    2K panorama ──> Camera Plot ──> control video ──> WAN ──> pano frames
+                          │                                      │
+                          └── camplot_rail.json ─────────────────┤
+                                                                 v
+                                                   HiRes Composite  ──> frames/*.png
+                                                                 │      (8192x4096)
+                                                                 └──> proxy_frames
+                                                                        │
+                                    SphereSfM Dataset (Dual-Res) <──────┘
+                                       hires_dir = frames/
+
+The composite frames are written to DISK, not returned as an IMAGE batch: 25 frames
+at 8192x4096 is 8 GB as a float32 tensor and four trajectories would be 33 GB. The
+dual-res SfM node reads them off disk one at a time, which is what that node exists
+for. What comes back as IMAGE is a downscaled proxy -- which is also exactly what
+that node wants wired into its ``pano_frames_*`` inputs, since SfM poses are angular
+and gain nothing from 8K.
+"""
+import os
+
+import numpy as np
+import torch
+
+import comfy.model_management
+import comfy.utils
+
+from .common import _MOGE_AUTO, _moge_ckpt_input, _moge_for_node, _p2s_output_base
+
+
+def _u8(image):
+    """ComfyUI IMAGE [B,H,W,3] float 0..1 -> uint8 numpy, keeping the batch."""
+    return np.clip(image.cpu().numpy() * 255.0, 0, 255).astype(np.uint8)
+
+
+def _upscaler(upscale_model):
+    """Wrap an UPSCALE_MODEL into ``callable(uint8 HxWx3) -> uint8``, or None.
+
+    Tiled so an 8K target does not need an 8K activation. The upscaler only matters
+    inside the holes in geometry mode (the source supplies everything else), but in
+    wan mode it supplies the detail everywhere the source is distrusted too.
+    """
+    if upscale_model is None:
+        return None
+    dev = comfy.model_management.get_torch_device()
+
+    def up(img_u8):
+        m = upscale_model.to(dev)
+        t = torch.from_numpy(img_u8.astype(np.float32) / 255.0).permute(2, 0, 1)[None].to(dev)
+        with torch.no_grad():
+            out = comfy.utils.tiled_scale(t, lambda a: m(a), tile_x=512, tile_y=512,
+                                          overlap=32, upscale_amount=m.scale)
+        o = (out[0].permute(1, 2, 0).clamp(0, 1).cpu().numpy() * 255).astype(np.uint8)
+        del t, out
+        # torch's own cache release, not model_management.soft_empty_cache: other packs
+        # monkeypatch that one and some of their versions need a live PromptServer.
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        return o
+
+    return up
+
+
+class HiResComposite:
+    """Rebuild a WAN fly-through from the ORIGINAL 8K panorama, using WAN only for holes.
+
+    WAN repaints every frame, so genuine texture is replaced by generated approximation
+    -- and differently in every frame. A Gaussian splat has to explain every view with
+    ONE 3D model, so whatever the views disagree about resolves as blur. But the
+    original panorama still exists at 8192x4096 and the camera rail is known, so the
+    correct pixel is knowable: reproject the original through the same MoGe geometry
+    and read it off. WAN is then needed only where geometry has no answer.
+
+    Measured against the shipping pipeline on the same scenes and settings:
+
+      * eval PSNR +1.31 dB (interior) / +2.37 dB (outdoor)
+      * detail retained in the reconstruction 31.9% -> 57.5% (interior),
+        25.4% -> 61.4% (outdoor) -- i.e. +115% / +338% reconstructed detail
+      * SfM pose residual vs the rail 0.09% -> 0.04% / 0.14% -> 0.02%
+      * multi-view consistency (frames that share a pose by construction)
+        38.6 -> 45.8 dB
+
+    Three settings carry almost all of that, so change them knowingly:
+
+      * ``base_mode=geometry`` (default) -- the source is the image and WAN only fills
+        holes. The single largest quality change. ``wan`` reproduces the original
+        behaviour: WAN is the base and supplies every low frequency, which is right for
+        a VIDEO (no tonal seams) and wrong for a splat (WAN's low frequencies drift).
+      * ``output_width=8192`` (default) -- at 8192 one output pixel covers one source
+        pixel, so the 8K is sampled 1:1 through mip 0 instead of being box-downsampled
+        first. Worth +26% reconstructed detail over 4096 on the same scene.
+      * train with ``--max-cap 3000000``. Every run in the research project silently
+        stopped at LichtFeld's 1M default, which was hiding the resolution gain.
+
+    WIRING
+      * ``panorama_hires`` -- the ORIGINAL full-resolution panorama (Poly Haven 8K, or
+        your upscaled pano). This is the whole point; a 2K image here buys nothing.
+      * ``panorama_geometry`` -- the panorama the Camera Plot / WAN branch was
+        conditioned on. Geometry MUST come from this one. Sourcing it from a different
+        copy (an HDR tonemap, a re-upscale) misaligns the composite against what WAN
+        generated: measured coverage collapsed 0.51 -> 0.04.
+      * ``rail`` -- wire the Camera Plot node's ``condition_dir`` output. That node
+        writes ``camplot_rail.json`` beside it, which is the exact rail WAN flew.
+      * ``wan_frames`` -- optional. Without it the holes are extrapolated from the
+        source: seamless but invents nothing, so large disocclusions smear. Fine for
+        short travel near the anchor, not for a camera that leaves the room.
+
+    MULTIPLE TRAJECTORIES: give every trajectory the same ``set_name`` and its own
+    ``traj_index`` (0, 1, 2, ...). They all write into ONE ``frames/`` folder, named so
+    the sorted order is the concatenation order -- which is what the dual-res SfM node
+    needs, and putting every trajectory into ONE reconstruction is what supplies the
+    real 3D parallax no single clip has.
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "panorama_hires": ("IMAGE", {
+                    "tooltip": "The ORIGINAL high-resolution panorama (8192x4096). Every "
+                               "output pixel that geometry can explain is read from this "
+                               "image, so its detail is the ceiling on the whole result."}),
+                "panorama_geometry": ("IMAGE", {
+                    "tooltip": "The panorama the Camera Plot / WAN branch was conditioned "
+                               "on -- normally the same image you fed Camera Plot. MoGe "
+                               "depth comes from THIS one so the reprojection lines up "
+                               "with what WAN generated. A different copy (HDR tonemap, "
+                               "re-upscale) misaligns it; measured coverage collapsed "
+                               "0.51 -> 0.04."}),
+                "rail": ("STRING", {"default": "",
+                    "tooltip": "Wire the Camera Plot node's rail_json output here -- the exact "
+                               "camera path its WAN clip was flown along. Use rail_json, not "
+                               "condition_dir: several Camera Plot nodes sharing one "
+                               "dataset_dir all write condition/, so only the last one's plain "
+                               "camplot_rail.json survives and the rest are lost for good. "
+                               "rail_json points at that node's own copy, named "
+                               "camplot_rail_<output_name>_<node_id>.json. A folder or file "
+                               "path also works."}),
+                "set_name": ("STRING", {"default": "hires_composite",
+                    "tooltip": "Folder under ComfyUI/output that collects this scene's "
+                               "composite frames. Give every trajectory of one scene the "
+                               "SAME set_name -- they share one frames/ folder, which is "
+                               "what the dual-res SfM node reads."}),
+                "traj_index": ("INT", {"default": 0, "min": 0, "max": 31,
+                    "tooltip": "Which trajectory this is (0, 1, 2, ...). Only used to name "
+                               "the files so sorted order = concatenation order. Give each "
+                               "Camera Plot branch a different one; re-running the same "
+                               "index replaces just that trajectory's frames."}),
+                "output_width": ("INT", {"default": 8192, "min": 1024, "max": 16384, "step": 256,
+                    "tooltip": "Composite width. Set it to the SOURCE panorama's width: at "
+                               "8192 one output pixel covers one source pixel, so the 8K is "
+                               "sampled 1:1 through mip 0. Below that the source is "
+                               "minified before it is ever seen (+26% reconstructed detail "
+                               "measured for 8192 over 4096)."}),
+                "base_mode": (["geometry", "wan"], {"default": "geometry",
+                    "tooltip": "geometry (recommended): the reprojected source IS the image "
+                               "at every frequency, WAN only fills holes, tone-matched. wan: "
+                               "the original behaviour -- WAN is the base and supplies all "
+                               "low frequencies, source detail injected on top where the two "
+                               "agree. Right for a video, wrong for a splat: WAN's low "
+                               "frequencies drift between frames and 3DGS turns that into "
+                               "blur."}),
+            },
+            "optional": {
+                "wan_frames": ("IMAGE", {
+                    "tooltip": "The WAN equirect video for THIS trajectory (same rail, same "
+                               "frame count). Fills the disocclusions. Leave unconnected to "
+                               "extrapolate the holes from the source instead -- seamless "
+                               "but it invents nothing, so big disocclusions smear."}),
+                "upscale_model": ("UPSCALE_MODEL", {
+                    "tooltip": "Optional upscaler for the WAN frames before they are "
+                               "composited (Load Upscale Model -> here). 4x-UltraSharp v1 "
+                               "is the measured default in the research project: ~9x faster "
+                               "than V2 (RRDBNet vs a DAT transformer) for a quality trade, "
+                               "not a loss. In geometry mode it only affects hole pixels."}),
+                "frames": ("STRING", {"default": "all",
+                    "tooltip": "Which frames to composite. 'all', '0-15', '/8' (every 8th), "
+                               "or '0-15,16-/8' -- all of the first 16 then every 8th, which "
+                               "takes 25 of 81 frames. Coverage is highest near the start of "
+                               "a trajectory and decays as the camera leaves the panorama's "
+                               "viewpoint, so spend the budget there."}),
+                "proxy_width": ("INT", {"default": 2048, "min": 512, "max": 4096, "step": 128,
+                    "tooltip": "Width of the proxy_frames output (the SfM input). SPHERE "
+                               "poses are angular, so posing gains nothing from 8K -- 2048 "
+                               "finds the same features far cheaper and keeps exhaustive "
+                               "matching affordable."}),
+                "geom_scale": ("INT", {"default": 2, "min": 1, "max": 3,
+                    "tooltip": "Coordinate-field raster = 2048 x this, wide. 2 rasterises "
+                               "the field at output resolution: sharper silhouettes for "
+                               "~0.24 GB more VRAM. 1 is the cheap setting."}),
+                "moge_level": ("INT", {"default": 6, "min": 0, "max": 9,
+                    "tooltip": "MoGe detail level. Keep it at the value Camera Plot used (6) "
+                               "-- that reuses its cached depth AND guarantees the geometry "
+                               "is the one WAN saw. Level 9 measured identical usable area "
+                               "at 3x the cost: a depth discontinuity is a property of the "
+                               "scene, not of depth resolution."}),
+                "merge_long": ("INT", {"default": 1440, "min": 512, "max": 4096, "step": 64,
+                    "tooltip": "Panorama depth-merge resolution. Keep it matched to Camera "
+                               "Plot (1440) for the same reason as moge_level."}),
+                "depth_grid": (["geometry_res", "conditioning_2k"], {"default": "geometry_res",
+                    "tooltip": "Which grid MoGe estimates on. geometry_res (default) matches "
+                               "the research pipeline exactly -- validated to 56 dB against "
+                               "its reference frame, coverage identical to 4 decimals. "
+                               "conditioning_2k estimates on the 2048x1024 grid Camera Plot "
+                               "already used, so it reuses that cached depth (~30 s faster) "
+                               "at the cost of one extra resample: 0.2% coverage difference "
+                               "measured. The lsmr merge is at merge_long either way, so "
+                               "neither is a better estimate."}),
+                "moge_ckpt": _moge_ckpt_input(),
+                "rho_hi": ("FLOAT", {"default": 4.0, "min": 1.0, "max": 16.0, "step": 0.5,
+                    "tooltip": "Minification cut-off: source pixels per output pixel above "
+                               "which the source is dropped in favour of WAN. Raising it "
+                               "keeps more of the frame at grazing angles. Tuned while an "
+                               "8-bit coordinate bug was active, so it is likely tighter "
+                               "than it needs to be -- a sweep here is the highest-value "
+                               "tuning left."}),
+                "tone_work": ("INT", {"default": 1024, "min": 0, "max": 8192, "step": 256,
+                    "tooltip": "Width the hole-fill tone gain is evaluated at (0 = full "
+                               "output width). The gain is a low-pass by construction, so a "
+                               "1024 grid is exact to under a quantisation step (max 2/255) "
+                               "and turns 55 s/frame into 0.16 s at 8192."}),
+                "prefetch": ("BOOLEAN", {"default": True,
+                    "tooltip": "Rasterise the next chunk of frames while the current one is "
+                               "still being composited, instead of alternating render-burst "
+                               "and per-frame work. Costs host RAM: it keeps two chunks of "
+                               "render passes, which at geometry_scale 2 is a few GB. Turn "
+                               "OFF if you are short on system memory."}),
+                "save_video": ("BOOLEAN", {"default": False,
+                    "tooltip": "Also write composite.mp4 next to the frames (h264, crf 14). "
+                               "Handy for eyeballing temporal stability; irrelevant to the "
+                               "dataset."}),
+                "moge_model": ("MOGE_MODEL", {
+                    "tooltip": "Optional pre-loaded MoGe model (MoGe Model Loader). Note "
+                               "depth is cached on the panorama + params anyway, so wiring "
+                               "the same one Camera Plot used mainly saves a reload."}),
+            },
+        }
+
+    RETURN_TYPES = ("STRING", "IMAGE", "IMAGE", "STRING", "STRING")
+    RETURN_NAMES = ("hires_dir", "proxy_frames", "gate_masks", "report", "proxy_dir")
+    FUNCTION = "run"
+    OUTPUT_NODE = True        # terminal-ish: it writes the composite frames to disk
+    CATEGORY = "SplatKit"
+
+    def run(self, panorama_hires, panorama_geometry, rail, set_name, traj_index,
+            output_width, base_mode, wan_frames=None, upscale_model=None,
+            frames="all", proxy_width=2048, geom_scale=2, moge_level=6, merge_long=1440,
+            depth_grid="geometry_res", moge_ckpt=_MOGE_AUTO, rho_hi=4.0, tone_work=1024,
+            prefetch=True, save_video=False, moge_model=None):
+        import time
+
+        from ..core import hires_composite as hc
+
+        dev = str(comfy.model_management.get_torch_device())
+        src_hi = _u8(panorama_hires)[0]
+        pano_geo = _u8(panorama_geometry)[0]
+        wan = _u8(wan_frames) if wan_frames is not None else None
+        rail_np = hc.load_rail(rail)
+
+        if src_hi.shape[1] <= pano_geo.shape[1]:
+            print(f"[HiResComposite] WARNING: panorama_hires is {src_hi.shape[1]}px wide, "
+                  f"no larger than panorama_geometry ({pano_geo.shape[1]}px). This node "
+                  f"exists to recover detail the 2K conditioning image does not have -- "
+                  f"feed the ORIGINAL high-resolution panorama into panorama_hires.")
+
+        out_dir = _p2s_output_base(set_name)
+        model, ckpt = _moge_for_node(moge_ckpt, moge_model)
+        moge_kwargs = dict(resolution_level=int(moge_level), merge_long=int(merge_long),
+                           merge_short=int(merge_long) // 2, model=model, ckpt=ckpt)
+
+        pbar = comfy.utils.ProgressBar(100)
+
+        def progress(done, total):
+            comfy.model_management.throw_exception_if_processing_interrupted()
+            pbar.update_absolute(int(100 * done / max(total, 1)), 100)
+
+        t0 = time.perf_counter()
+        res = hc.run_composite(
+            src_hi, pano_geo, rail_np, out_dir, wan=wan,
+            out_w=int(output_width), base_mode=base_mode, frames_spec=frames,
+            upscale=_upscaler(upscale_model), proxy_width=int(proxy_width),
+            name_prefix=f"traj{int(traj_index):02d}_frame_", device=dev,
+            moge_kwargs=moge_kwargs, depth_grid=depth_grid, prefetch=bool(prefetch),
+            params=dict(geom_scale=int(geom_scale), rho_hi=float(rho_hi),
+                        tone_work=int(tone_work)),
+            progress=progress)
+        dt = time.perf_counter() - t0
+
+        if save_video:
+            self._write_video(res["frames_dir"], out_dir,
+                              f"composite_traj{int(traj_index):02d}.mp4",
+                              f"traj{int(traj_index):02d}_frame_")
+
+        report = (
+            f"{res['num_frames']}/{res['frames_total']} frames at {int(output_width)}x"
+            f"{int(output_width) // 2}, base_mode={base_mode}\n"
+            f"coverage mean={res['coverage_mean']:.2f} min={res['coverage_min']:.2f} "
+            f"(fraction of each frame taken from the source, not WAN)\n"
+            f"{dt:.0f}s total, {dt / max(res['num_frames'], 1):.1f}s/frame\n"
+            f"hires  -> {res['frames_dir']}\n"
+            f"proxies-> {res['proxy_dir']}")
+        print("[HiResComposite] " + report.replace("\n", "\n[HiResComposite] "))
+        print("[HiResComposite] next: run 4b_hires_composite_to_dataset -- load the "
+              "proxies/ folder, point hires_dir at frames/ -- then train with "
+              "--max-cap 3000000 -r 1 --max-width 4096.")
+
+        proxy = torch.from_numpy(res["proxies"].astype(np.float32) / 255.0)
+        gate = torch.from_numpy(res["gates"].astype(np.float32) / 255.0)[..., None]
+        return (res["frames_dir"], proxy, gate.repeat(1, 1, 1, 3), report, res["proxy_dir"])
+
+    @staticmethod
+    def _write_video(frames_dir, out_dir, name, prefix, fps=16):
+        """Optional h264 preview of this trajectory's composite frames."""
+        try:
+            import av
+            from PIL import Image
+        except Exception as e:
+            print(f"[HiResComposite] save_video skipped ({e})")
+            return
+        files = sorted(f for f in os.listdir(frames_dir)
+                       if f.startswith(prefix) and f.lower().endswith(".png"))
+        if not files:
+            return
+        first = np.asarray(Image.open(os.path.join(frames_dir, files[0])).convert("RGB"))
+        path = os.path.join(out_dir, name)
+        with av.open(path, "w") as c:
+            s = c.add_stream("h264", rate=fps)
+            s.width, s.height, s.pix_fmt = first.shape[1], first.shape[0], "yuv420p"
+            s.options = {"crf": "14"}
+            for f in files:
+                a = np.asarray(Image.open(os.path.join(frames_dir, f)).convert("RGB"))
+                for pkt in s.encode(av.VideoFrame.from_ndarray(a, format="rgb24")):
+                    c.mux(pkt)
+            for pkt in s.encode():
+                c.mux(pkt)
+        print(f"[HiResComposite] video -> {path}")
+
+
+NODE_CLASS_MAPPINGS = {"SplatKit_HiResComposite": HiResComposite}
+NODE_DISPLAY_NAME_MAPPINGS = {
+    "SplatKit_HiResComposite": "HiRes Composite (8K texture into WAN frames)",
+}

@@ -11,6 +11,7 @@ ComfyUI tensors, and calls the engine. Grouped by pipeline stage:
     spheresfm.py      COLMAP dataset build + add-a-trajectory
     hires.py          HiRes pinhole fly-through straight from the pano
     hires_dataset.py  register those renders into an existing dataset
+    hires_composite.py  reproject the ORIGINAL 8K pano into the WAN frames
     upscale.py        dataset upscaling add-on
     repair.py         rebuild sparse/0 from the SfM scratch dir
     i2p.py            image-to-pano front end (workflow 0)
@@ -35,6 +36,7 @@ _MODULES = [
     # after hires: it reuses that module's pinhole renderer helpers.
     ("camera_plot_persp", "perspective camera plot node"),
     ("hires_dataset", "hires dataset node"),
+    ("hires_composite", "hires composite node"),
     ("upscale", "upscale nodes"),
     ("repair", "rebuild-sparse node"),
     ("i2p", "image-to-pano nodes"),

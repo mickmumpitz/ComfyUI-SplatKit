@@ -62,12 +62,15 @@ panorama yet.
 | `0_generate_360_panorama-upscale.json` | Make the input pano itself. Two modes on one switch: **text→pano** (Krea 2 Turbo generates a 2:1 equirect directly) and **image→pano** (Qwen-Image-Edit + a 360 LoRA turns any photo into a full ERP). Both finish with a detail-refine pass, a roll-180°-inpaint seam fix so the wrap edge is invisible, and an upscale tail. | `comfyui-LatLong`, `ComfyUI-KJNodes`, `ComfyUI_essentials`, `ComfyUI_UltimateSDUpscale`, `ComfyUI-SeedVR2_VideoUpscaler`, `ComfyUI-Easy-Use` |
 | `1_camera_plot_flythrough.json` | The main graph. Draw a camera path on the pano, WAN fills it in, SphereSfM writes the dataset. | — |
 | `1b_camera_plot_add_to_dataset.json` | Grow an existing dataset with one more trajectory instead of rebuilding it. | — |
+| `1c_generate-dataset-hires.json` | Workflow 1 with a **HiRes Composite** on every branch, already wired to that branch's camera rail and WAN frames. One queue: pano → WAN → composite frames. Finish with `4b`. | — |
 | `2a_upscale_colmap_camera_sorted.json` | Upscale a finished dataset in place, in camera-major order. | `ComfyUI-SeedVR2_VideoUpscaler` |
 | `2b1_upscale_panorama_frames.json` | *Best quality, step 1 of 2.* Upscale the saved equirect panoramas frame-by-frame to 8K and stream them to disk. | `ComfyUI-VideoHelperSuite`, `ComfyUI_UltimateSDUpscale`, `ComfyUI_essentials` |
 | `2b2_sfm_from_upscaled.json` | *Step 2.* Run SphereSfM on the upscaled panoramas from `2b1`. | `ComfyUI-VideoHelperSuite` |
 | `2b2_sfm_from_upscaled_dualres.json` | Same as above, dual-res variant: SfM solves on downscaled panos, cube faces are cut from the full 8K. Cheaper solve, sharper faces. | `ComfyUI-VideoHelperSuite` |
 | `2c_spheresfm_from_panoramas.json` | Pure SphereSfM: hand it *any* panorama folder with no COLMAP data yet and it builds the dataset. Frame stride lives on the node, and filling `hires_dir` turns the same graph back into the dual-res variant. | `ComfyUI-VideoHelperSuite` |
 | `4_hires_add_to_dataset.json` | Render high-resolution pinhole views straight from the pano (no WAN) and register them into an existing dataset. | `ComfyUI-VideoHelperSuite` |
+| `4a_hires_composite.json` | *Best texture, step 1 of 2.* Reproject the ORIGINAL 8K panorama through the same geometry the WAN clip was flown along, so the splat trains on real photograph and WAN only fills the holes. +115% reconstructed detail indoors, +338% outdoors. See [docs/HIRES_COMPOSITE.md](docs/HIRES_COMPOSITE.md). | `ComfyUI-VideoHelperSuite` |
+| `4b_hires_composite_to_dataset.json` | *Step 2.* Dual-res SphereSfM over the composite: poses solved on the proxies, cube faces cut from the 8K frames. | `ComfyUI-VideoHelperSuite` |
 | `_all_nodes_overview.json` | Not a pipeline — a catalogue. Every node in the pack, grouped by module, all muted so Queue does nothing. Load it to see the whole surface at once. | — |
 
 Everything else these graphs use is core ComfyUI. Install the packs in the right-hand
@@ -79,7 +82,7 @@ wrong prompt visibly degrades what WAN paints into the holes.
 
 ## Nodes
 
-Eighteen nodes, all under the **SplatKit** category. There is no dead code behind them:
+Nineteen nodes, all under the **SplatKit** category. There is no dead code behind them:
 every class in the pack is registered. Load `workflows/_all_nodes_overview.json` to see
 them all laid out at once.
 
@@ -94,8 +97,8 @@ panorama-folder → COLMAP path when `hires_dir` is left empty), `SphereSfM Add 
 **Upscaling** (`nodes/upscale.py`) — `Resolve Dataset Images`,
 `Load Dataset Images (Ordered)`, `Save Upscaled Dataset`, `Save Upscaled Frames (Streaming)`.
 
-**Hi-res** (`nodes/hires.py`, `nodes/hires_dataset.py`) — `HiRes Pano Fly-Through`,
-`Add HiRes Views to Dataset`.
+**Hi-res** (`nodes/hires.py`, `nodes/hires_dataset.py`, `nodes/hires_composite.py`) —
+`HiRes Pano Fly-Through`, `Add HiRes Views to Dataset`, `HiRes Composite`.
 
 **Image to pano** (`nodes/i2p.py`) — `Persp to ERP Warp`, `Estimate FOV`, `Switch`. The
 front end workflow `0` uses in image→pano mode.
@@ -180,6 +183,32 @@ complete). Trainers pick them up as follows: **nerfstudio/splatfacto** — add
 next to `images/`; **Postshot** — import as Image Masks, mode *Remove Occluders*.
 Trainers without mask support ignore the folder.
 
+### Hi-res composite — keep the panorama's real texture through the WAN pass
+
+The fly-through above skips WAN entirely. **HiRes Composite** is the other answer to the
+same problem: keep the WAN clip, but stop letting it repaint the parts of the frame that
+were never in question.
+
+WAN re-synthesises *every* pixel, so the panorama's genuine texture is replaced by
+generated approximation — and differently in every frame. A splat has to explain every view
+with one 3D model, so that disagreement resolves as blur. But the original panorama still
+exists at 8192×4096 and the camera rail is known, so for most of the frame the correct pixel
+is *knowable*: reproject the original through the same MoGe geometry and read it off. WAN is
+then only needed where geometry has no answer.
+
+Measured against the shipping pipeline on the same scenes: eval PSNR +1.31 dB indoors /
++2.37 dB outdoors, detail retained in the reconstruction 31.9% → 57.5% and 25.4% → 61.4%
+(**+115% / +338% reconstructed detail**), and the SfM pose residual against the rail cut
+from 0.09% → 0.04% and 0.14% → 0.02%.
+
+Three settings carry almost all of that: `base_mode=geometry` (the source is the image, WAN
+only fills holes), `output_width` set to the source panorama's width (so it is sampled 1:1
+instead of minified first), and training with `--max-cap 3000000` (LichtFeld's 1M default
+was silently hiding the resolution gain).
+
+Full reference, including what still fails and why more camera paths will not fix it:
+**[docs/HIRES_COMPOSITE.md](docs/HIRES_COMPOSITE.md)**.
+
 ## Training the dataset
 
 The COLMAP output is ordinary — point any trainer at it:
@@ -239,12 +268,14 @@ nodes/                 the ComfyUI layer -- INPUT_TYPES, tensor unpacking, thin 
   wan.py               Wan I2V masked-video conditioning
   spheresfm.py         COLMAP dataset build + add-a-trajectory
   hires.py             HiRes pinhole fly-through     hires_dataset.py  register them
+  hires_composite.py   reproject the ORIGINAL 8K pano into the WAN frames
   upscale.py           dataset upscaling add-on      repair.py         COLMAP repair
   i2p.py               image-to-pano front end (workflow 0)
 
 core/                  the engine. No ComfyUI imports at all. spheresfm_colmap (SfM),
-                       matrix3d_pipeline (MoGe depth + mesh render), fov_estimate,
-                       gpu_lsmr (GPU least-squares), path_suggest (camera-path planner).
+                       matrix3d_pipeline (MoGe depth + mesh render), hires_composite
+                       (coordinate-field reprojection), fov_estimate, gpu_lsmr (GPU
+                       least-squares), path_suggest (camera-path planner).
 shim/                  pure-PyTorch / triton nvdiffrast replacement (see below)
 vendored/              third-party source: MoGe, utils3d, Matrix-3D utils
 web/                   in-graph camera path editor (JS)

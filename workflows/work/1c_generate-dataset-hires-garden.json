@@ -1,8 +1,8 @@
 {
-  "id": "04658577-9e2b-42a8-8eba-5abe90046b30",
+  "id": "wf1c-generate-dataset-hires",
   "revision": 0,
-  "last_node_id": 80,
-  "last_link_id": 133,
+  "last_node_id": 87,
+  "last_link_id": 173,
   "nodes": [
     {
       "id": 30,
@@ -18,7 +18,7 @@
       "flags": {
         "collapsed": false
       },
-      "order": 27,
+      "order": 30,
       "mode": 0,
       "inputs": [
         {
@@ -107,7 +107,7 @@
       "flags": {
         "collapsed": false
       },
-      "order": 29,
+      "order": 32,
       "mode": 0,
       "inputs": [
         {
@@ -196,7 +196,7 @@
       "flags": {
         "collapsed": true
       },
-      "order": 46,
+      "order": 49,
       "mode": 0,
       "inputs": [
         {
@@ -217,7 +217,8 @@
           "slot_index": 0,
           "links": [
             67,
-            75
+            75,
+            144
           ]
         }
       ],
@@ -242,7 +243,7 @@
       "flags": {
         "collapsed": true
       },
-      "order": 47,
+      "order": 50,
       "mode": 0,
       "inputs": [
         {
@@ -263,7 +264,8 @@
           "slot_index": 0,
           "links": [
             66,
-            77
+            77,
+            150
           ]
         }
       ],
@@ -288,7 +290,7 @@
       "flags": {
         "collapsed": true
       },
-      "order": 52,
+      "order": 57,
       "mode": 0,
       "inputs": [
         {
@@ -336,7 +338,7 @@
       "flags": {
         "collapsed": true
       },
-      "order": 26,
+      "order": 29,
       "mode": 0,
       "inputs": [
         {
@@ -384,7 +386,7 @@
       "flags": {
         "collapsed": false
       },
-      "order": 31,
+      "order": 34,
       "mode": 0,
       "inputs": [
         {
@@ -473,7 +475,7 @@
       "flags": {
         "collapsed": true
       },
-      "order": 48,
+      "order": 51,
       "mode": 0,
       "inputs": [
         {
@@ -494,7 +496,8 @@
           "slot_index": 0,
           "links": [
             96,
-            97
+            97,
+            156
           ]
         }
       ],
@@ -519,7 +522,7 @@
       "flags": {
         "collapsed": true
       },
-      "order": 30,
+      "order": 33,
       "mode": 0,
       "inputs": [
         {
@@ -567,7 +570,7 @@
       "flags": {
         "collapsed": true
       },
-      "order": 54,
+      "order": 60,
       "mode": 0,
       "inputs": [
         {
@@ -610,12 +613,12 @@
       ],
       "size": [
         590,
-        393
+        106
       ],
       "flags": {
         "collapsed": false
       },
-      "order": 60,
+      "order": 68,
       "mode": 0,
       "inputs": [
         {
@@ -664,7 +667,7 @@
       "flags": {
         "collapsed": true
       },
-      "order": 28,
+      "order": 31,
       "mode": 0,
       "inputs": [
         {
@@ -712,7 +715,7 @@
       "flags": {
         "collapsed": false
       },
-      "order": 41,
+      "order": 44,
       "mode": 0,
       "inputs": [
         {
@@ -783,7 +786,7 @@
       "flags": {
         "collapsed": false
       },
-      "order": 42,
+      "order": 45,
       "mode": 0,
       "inputs": [
         {
@@ -854,7 +857,7 @@
       "flags": {
         "collapsed": false
       },
-      "order": 43,
+      "order": 46,
       "mode": 0,
       "inputs": [
         {
@@ -925,7 +928,7 @@
       "flags": {
         "collapsed": true
       },
-      "order": 51,
+      "order": 55,
       "mode": 0,
       "inputs": [
         {
@@ -971,7 +974,7 @@
         82
       ],
       "flags": {},
-      "order": 23,
+      "order": 26,
       "mode": 0,
       "inputs": [
         {
@@ -1016,7 +1019,7 @@
       "flags": {
         "collapsed": false
       },
-      "order": 33,
+      "order": 36,
       "mode": 2,
       "inputs": [
         {
@@ -1105,7 +1108,7 @@
       "flags": {
         "collapsed": true
       },
-      "order": 32,
+      "order": 35,
       "mode": 2,
       "inputs": [
         {
@@ -1153,7 +1156,7 @@
       "flags": {
         "collapsed": true
       },
-      "order": 55,
+      "order": 62,
       "mode": 2,
       "inputs": [
         {
@@ -1201,7 +1204,7 @@
       "flags": {
         "collapsed": false
       },
-      "order": 44,
+      "order": 47,
       "mode": 2,
       "inputs": [
         {
@@ -1272,7 +1275,7 @@
       "flags": {
         "collapsed": true
       },
-      "order": 49,
+      "order": 52,
       "mode": 2,
       "inputs": [
         {
@@ -1293,7 +1296,8 @@
           "slot_index": 0,
           "links": [
             114,
-            126
+            126,
+            162
           ]
         }
       ],
@@ -1318,7 +1322,7 @@
       "flags": {
         "collapsed": false
       },
-      "order": 39,
+      "order": 42,
       "mode": 2,
       "inputs": [
         {
@@ -1367,7 +1371,7 @@
       "flags": {
         "collapsed": false
       },
-      "order": 22,
+      "order": 25,
       "mode": 2,
       "inputs": [
         {
@@ -1420,8 +1424,10 @@
         {
           "name": "rail_json",
           "type": "STRING",
-          "links": null,
-          "slot_index": 4
+          "slot_index": 4,
+          "links": [
+            160
+          ]
         }
       ],
       "properties": {
@@ -1454,7 +1460,7 @@
         280
       ],
       "flags": {},
-      "order": 25,
+      "order": 28,
       "mode": 0,
       "inputs": [
         {
@@ -1543,7 +1549,7 @@
       "flags": {
         "collapsed": true
       },
-      "order": 24,
+      "order": 27,
       "mode": 0,
       "inputs": [
         {
@@ -1578,75 +1584,6 @@
       ]
     },
     {
-      "id": 17,
-      "type": "KSampler",
-      "pos": [
-        1290,
-        200
-      ],
-      "size": [
-        300,
-        416
-      ],
-      "flags": {},
-      "order": 40,
-      "mode": 0,
-      "inputs": [
-        {
-          "name": "model",
-          "type": "MODEL",
-          "link": 5
-        },
-        {
-          "name": "positive",
-          "type": "CONDITIONING",
-          "link": 19
-        },
-        {
-          "name": "negative",
-          "type": "CONDITIONING",
-          "link": 20
-        },
-        {
-          "name": "latent_image",
-          "type": "LATENT",
-          "link": 21
-        },
-        {
-          "name": "steps",
-          "type": "INT",
-          "widget": {
-            "name": "steps"
-          },
-          "link": 104
-        }
-      ],
-      "outputs": [
-        {
-          "name": "LATENT",
-          "type": "LATENT",
-          "slot_index": 0,
-          "links": [
-            22
-          ]
-        }
-      ],
-      "properties": {
-        "cnr_id": "comfy-core",
-        "ver": "0.24.0",
-        "Node name for S&R": "KSampler"
-      },
-      "widgets_values": [
-        0,
-        "fixed",
-        4,
-        1,
-        "euler",
-        "normal",
-        1
-      ]
-    },
-    {
       "id": 23,
       "type": "CreateVideo",
       "pos": [
@@ -1660,7 +1597,7 @@
       "flags": {
         "collapsed": true
       },
-      "order": 50,
+      "order": 53,
       "mode": 0,
       "inputs": [
         {
@@ -1708,7 +1645,7 @@
       "flags": {
         "collapsed": true
       },
-      "order": 45,
+      "order": 48,
       "mode": 0,
       "inputs": [
         {
@@ -1729,7 +1666,8 @@
           "slot_index": 0,
           "links": [
             23,
-            27
+            27,
+            138
           ]
         }
       ],
@@ -1752,7 +1690,7 @@
         393
       ],
       "flags": {},
-      "order": 57,
+      "order": 65,
       "mode": 0,
       "inputs": [
         {
@@ -1799,7 +1737,7 @@
         58
       ],
       "flags": {},
-      "order": 34,
+      "order": 37,
       "mode": 0,
       "inputs": [
         {
@@ -1920,7 +1858,7 @@
         82
       ],
       "flags": {},
-      "order": 16,
+      "order": 19,
       "mode": 0,
       "inputs": [
         {
@@ -1965,7 +1903,7 @@
       "flags": {
         "collapsed": true
       },
-      "order": 17,
+      "order": 20,
       "mode": 0,
       "inputs": [
         {
@@ -2171,7 +2109,7 @@
       "flags": {
         "collapsed": true
       },
-      "order": 15,
+      "order": 18,
       "mode": 0,
       "inputs": [
         {
@@ -2228,8 +2166,8 @@
             101,
             102,
             103,
-            104,
-            124
+            124,
+            173
           ]
         }
       ],
@@ -2343,55 +2281,6 @@
       "bgcolor": "#B67921FF"
     },
     {
-      "id": 3,
-      "type": "LoadImage",
-      "pos": [
-        -250,
-        200
-      ],
-      "size": [
-        420,
-        330
-      ],
-      "flags": {},
-      "order": 12,
-      "mode": 0,
-      "inputs": [],
-      "outputs": [
-        {
-          "name": "IMAGE",
-          "type": "IMAGE",
-          "slot_index": 0,
-          "links": [
-            9,
-            28,
-            34,
-            47,
-            81,
-            118,
-            125
-          ]
-        },
-        {
-          "name": "MASK",
-          "type": "MASK",
-          "slot_index": 1,
-          "links": null
-        }
-      ],
-      "properties": {
-        "cnr_id": "comfy-core",
-        "ver": "0.24.0",
-        "Node name for S&R": "LoadImage"
-      },
-      "widgets_values": [
-        "pano_360_00024_.png",
-        "image"
-      ],
-      "color": "#E0E0E0FF",
-      "bgcolor": "#FFFFFFFF"
-    },
-    {
       "id": 60,
       "type": "SaveVideo",
       "pos": [
@@ -2405,7 +2294,7 @@
       "flags": {
         "collapsed": false
       },
-      "order": 61,
+      "order": 70,
       "mode": 2,
       "inputs": [
         {
@@ -2452,7 +2341,7 @@
         470
       ],
       "flags": {},
-      "order": 56,
+      "order": 63,
       "mode": 2,
       "inputs": [
         {
@@ -2547,12 +2436,12 @@
       ],
       "size": [
         590,
-        393
+        106
       ],
       "flags": {
         "collapsed": false
       },
-      "order": 58,
+      "order": 66,
       "mode": 0,
       "inputs": [
         {
@@ -2601,7 +2490,7 @@
       "flags": {
         "collapsed": false
       },
-      "order": 21,
+      "order": 24,
       "mode": 0,
       "inputs": [
         {
@@ -2654,8 +2543,10 @@
         {
           "name": "rail_json",
           "type": "STRING",
-          "links": null,
-          "slot_index": 4
+          "slot_index": 4,
+          "links": [
+            154
+          ]
         }
       ],
       "properties": {
@@ -2690,7 +2581,7 @@
       "flags": {
         "collapsed": false
       },
-      "order": 38,
+      "order": 41,
       "mode": 0,
       "inputs": [
         {
@@ -2739,7 +2630,7 @@
       "flags": {
         "collapsed": false
       },
-      "order": 19,
+      "order": 22,
       "mode": 0,
       "inputs": [
         {
@@ -2792,8 +2683,10 @@
         {
           "name": "rail_json",
           "type": "STRING",
-          "links": null,
-          "slot_index": 4
+          "slot_index": 4,
+          "links": [
+            142
+          ]
         }
       ],
       "properties": {
@@ -2826,7 +2719,7 @@
         712
       ],
       "flags": {},
-      "order": 18,
+      "order": 21,
       "mode": 0,
       "inputs": [
         {
@@ -2879,8 +2772,10 @@
         {
           "name": "rail_json",
           "type": "STRING",
-          "links": null,
-          "slot_index": 4
+          "slot_index": 4,
+          "links": [
+            136
+          ]
         }
       ],
       "properties": {
@@ -2913,7 +2808,7 @@
         288
       ],
       "flags": {},
-      "order": 35,
+      "order": 38,
       "mode": 0,
       "inputs": [
         {
@@ -2949,52 +2844,6 @@
       ]
     },
     {
-      "id": 10,
-      "type": "CLIPTextEncode",
-      "pos": [
-        -250,
-        760
-      ],
-      "size": [
-        420,
-        130
-      ],
-      "flags": {},
-      "order": 14,
-      "mode": 0,
-      "inputs": [
-        {
-          "name": "clip",
-          "type": "CLIP",
-          "link": 6
-        }
-      ],
-      "outputs": [
-        {
-          "name": "CONDITIONING",
-          "type": "CONDITIONING",
-          "slot_index": 0,
-          "links": [
-            12,
-            35,
-            48,
-            86,
-            105
-          ]
-        }
-      ],
-      "properties": {
-        "cnr_id": "comfy-core",
-        "ver": "0.24.0",
-        "Node name for S&R": "CLIPTextEncode"
-      },
-      "widgets_values": [
-        "A high quality panoramic video of the scene, photorealistic, very clear, smooth camera movement, ultra-detailed, high resolution. Panorama. Dark cave"
-      ],
-      "color": "#E0E0E0FF",
-      "bgcolor": "#FFFFFFFF"
-    },
-    {
       "id": 32,
       "type": "SaveVideo",
       "pos": [
@@ -3008,7 +2857,7 @@
       "flags": {
         "collapsed": false
       },
-      "order": 36,
+      "order": 39,
       "mode": 0,
       "inputs": [
         {
@@ -3044,95 +2893,6 @@
       ]
     },
     {
-      "id": 34,
-      "type": "SplatKit_CameraPlotRenderControlGeo",
-      "pos": [
-        290,
-        1940
-      ],
-      "size": [
-        539.5833190917969,
-        712
-      ],
-      "flags": {
-        "collapsed": false
-      },
-      "order": 20,
-      "mode": 0,
-      "inputs": [
-        {
-          "name": "panorama",
-          "type": "IMAGE",
-          "link": 47
-        },
-        {
-          "name": "moge_model",
-          "shape": 7,
-          "type": "MOGE_MODEL",
-          "link": null
-        },
-        {
-          "name": "dataset_dir",
-          "shape": 7,
-          "type": "STRING",
-          "widget": {
-            "name": "dataset_dir"
-          },
-          "link": 70
-        }
-      ],
-      "outputs": [
-        {
-          "name": "control_video",
-          "type": "IMAGE",
-          "links": [
-            51,
-            54
-          ]
-        },
-        {
-          "name": "control_mask",
-          "type": "IMAGE",
-          "links": [
-            52
-          ]
-        },
-        {
-          "name": "condition_dir",
-          "type": "STRING",
-          "links": null
-        },
-        {
-          "name": "camera_preview",
-          "type": "IMAGE",
-          "links": null
-        },
-        {
-          "name": "rail_json",
-          "type": "STRING",
-          "links": null,
-          "slot_index": 4
-        }
-      ],
-      "properties": {
-        "aux_id": "mickmumpitz/ComfyUI-SplatKit",
-        "ver": "2c4d23360b5d29ee0feca88a336097c641119135",
-        "Node name for S&R": "SplatKit_CameraPlotRenderControlGeo"
-      },
-      "widgets_values": [
-        "0.000, 0.000, 0.000, 0.142, 0.147, -0.260\n0.479, 0.269, 0.014, 0.763, 0.516, -0.280\n0.629, 0.679, 0.305, 0.863, 0.661, 0.271",
-        "per_point_look",
-        81,
-        "camplot_path3",
-        4000,
-        "",
-        "auto (download)",
-        "",
-        null,
-        null
-      ]
-    },
-    {
       "id": 37,
       "type": "SaveVideo",
       "pos": [
@@ -3146,7 +2906,7 @@
       "flags": {
         "collapsed": false
       },
-      "order": 37,
+      "order": 40,
       "mode": 0,
       "inputs": [
         {
@@ -3182,69 +2942,6 @@
       ]
     },
     {
-      "id": 41,
-      "type": "SplatKit_DatasetProject",
-      "pos": [
-        -250,
-        580
-      ],
-      "size": [
-        420,
-        130
-      ],
-      "flags": {},
-      "order": 13,
-      "mode": 0,
-      "inputs": [],
-      "outputs": [
-        {
-          "name": "dataset_dir",
-          "type": "STRING",
-          "links": [
-            68,
-            69,
-            70,
-            80,
-            82,
-            119,
-            127
-          ]
-        },
-        {
-          "name": "control_rgb_prefix",
-          "type": "STRING",
-          "links": [
-            72,
-            73,
-            78,
-            79,
-            100,
-            116,
-            130,
-            131,
-            132,
-            133
-          ]
-        },
-        {
-          "name": "control_mask_prefix",
-          "type": "STRING",
-          "links": null
-        }
-      ],
-      "properties": {
-        "aux_id": "mickmumpitz/ComfyUI-SplatKit",
-        "ver": "2c4d23360b5d29ee0feca88a336097c641119135",
-        "Node name for S&R": "SplatKit_DatasetProject"
-      },
-      "widgets_values": [
-        "ritual-cave-01",
-        false
-      ],
-      "color": "#E0E0E0FF",
-      "bgcolor": "#FFFFFFFF"
-    },
-    {
       "id": 44,
       "type": "SaveVideo",
       "pos": [
@@ -3253,12 +2950,12 @@
       ],
       "size": [
         590,
-        393
+        106
       ],
       "flags": {
         "collapsed": false
       },
-      "order": 59,
+      "order": 67,
       "mode": 0,
       "inputs": [
         {
@@ -3297,18 +2994,18 @@
       "id": 19,
       "type": "SplatKit_SphereSfMDataset",
       "pos": [
-        2340,
-        200
+        2303.1462079279013,
+        -1214.9622592530684
       ],
       "size": [
         440,
-        546
+        570
       ],
       "flags": {
         "collapsed": false
       },
-      "order": 53,
-      "mode": 0,
+      "order": 59,
+      "mode": 2,
       "inputs": [
         {
           "name": "initial_pano",
@@ -3369,6 +3066,7 @@
           "links": null
         }
       ],
+      "title": "SphereSfM Dataset  (MUTED - replaced)",
       "properties": {
         "aux_id": "mickmumpitz/ComfyUI-SplatKit",
         "ver": "ae95eb77db2687a8d858f1e825d540bfff2e4677",
@@ -3392,10 +3090,1136 @@
         "panorama_only",
         "camera_major",
         "replace",
-        true
+        true,
+        false
       ],
       "color": "#E0E0E0FF",
       "bgcolor": "#FFFFFFFF"
+    },
+    {
+      "id": 77,
+      "type": "Note",
+      "pos": [
+        2980,
+        131.82220977334362
+      ],
+      "size": [
+        760,
+        700
+      ],
+      "flags": {},
+      "order": 12,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "properties": {},
+      "widgets_values": [
+        "1c - PANORAMA TO COLMAP DATASET, IN ONE QUEUE\n\nWorkflow 1, plus the HiRes Composite, plus the dataset build. Press Queue once.\n\n  panorama -> Camera Plot -> WAN -> HiRes Composite -> SphereSfM (dual-res) -> dataset\n\nWHAT THE COMPOSITE ADDS\nWAN repaints every pixel, so your panorama's real texture is replaced by generated\napproximation -- and differently in every frame. A splat has to explain every view with ONE\n3D model, so that disagreement becomes blur. The composite reprojects your ORIGINAL\npanorama through the same geometry along the same rail, and keeps WAN only for the holes.\nMeasured: +115% reconstructed detail indoors, +338% outdoors.\n\nYOU ONLY SET TWO THINGS\n  1. Load Image      -> your FULL-RESOLUTION panorama (8192x4096).\n                        This is the whole point. A 2K image here gives you the WAN clip back\n                        and nothing more. Camera Plot downscales it internally by itself, so\n                        one loader feeds both the texture and the geometry.\n  2. Dataset Project -> the project name. It drives the composite output folders too.\n  (plus the dataset name on the SphereSfM node at the far right, and your prompt.)\n\nWIRED FOR YOU\n  * each Camera Plot's rail_json -> its own composite. That is the exact path that branch's\n    WAN clip flew, and the one thing the composite cannot guess. Never share a rail between\n    branches: a wrong rail lands the texture in the wrong place everywhere, and the coverage\n    number will NOT warn you (it is built from geometry only, it never looks at WAN).\n  * each branch's VAEDecode -> its composite's wan_frames.\n  * composite proxies -> the dataset node's pano_frames_1..4, and composite 1's hires_dir ->\n    its hires_dir. Wiring them (rather than pointing at a folder) is what forces ComfyUI to\n    finish every composite before the dataset build starts.\n\nFRAME DENSITY ('frames' on each composite) -- measured on a 5090, 8192 wide, 4 paths:\n  0-80/2   (default)  41 of 81, EVENLY spaced.   27 min,  3.8 GB.  No sparse tail.\n  all                 81 of 81.                  50 min,  7.4 GB.  Adjacent frames overlap\n                      heavily, so most of that is redundancy -- and SfM matches every pair,\n                      so 324 frames is ~10x the matching work of 164.\n  0-15,16-/8          25 of 81, front-loaded.    18 min,  2.3 GB.  The old default: it was a\n                      COST saving from when the upscaler dominated the composite (12s/frame).\n                      In geometry mode the upscaler only fills holes, so a frame now costs\n                      8.5s and that saving is no longer worth the sparse tail -- the far end\n                      of each path is exactly where the splat is weakest.\nSet the SAME value on every composite -- the dataset node checks that the proxy count\nmatches the hi-res file count and stops if they disagree.\n\nSET output_width TO YOUR PANORAMA'S WIDTH (8192). Below that the source is minified before\nit is ever sampled, and past 4 source-pixels-per-output-pixel it is rejected entirely --\nat 2048 against an 8K pano you get pure WAN and coverage ~0. The node warns you.\n\nTHE 5th BRANCH IS MUTED, as in workflow 1, and so is its composite. The dataset node has\nfour pano_frames slots, so if you un-mute branch 5 you have run out -- put that composite's\nproxies through the folder route instead (4b_hires_composite_to_dataset.json).\n\nTHE OLD SphereSfM NODE IS MUTED. It built the dataset from raw WAN panoramas; you now build\nit from the composites. Un-mute it only if you want both for comparison.\n\nTHEN TRAIN -- and do not leave the cap at its default:\n  LichtFeld-Studio.exe -d \"<dataset>\" -o \"<dataset>\\splat\" --headless --train --no-splash ^\n      --eval --test-every 8 -r 1 --max-width 4096 --max-cap 3000000\nLichtFeld's 1M default silently hides the resolution gain: 1M -> 3M is +0.62 dB."
+      ],
+      "color": "#432",
+      "bgcolor": "#653"
+    },
+    {
+      "id": 81,
+      "type": "SplatKit_HiResComposite",
+      "pos": [
+        3800,
+        1531.8222097733437
+      ],
+      "size": [
+        480,
+        640
+      ],
+      "flags": {},
+      "order": 58,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "panorama_hires",
+          "type": "IMAGE",
+          "link": 146
+        },
+        {
+          "name": "panorama_geometry",
+          "type": "IMAGE",
+          "link": 147
+        },
+        {
+          "name": "wan_frames",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": 150
+        },
+        {
+          "name": "upscale_model",
+          "shape": 7,
+          "type": "UPSCALE_MODEL",
+          "link": 151
+        },
+        {
+          "name": "moge_model",
+          "shape": 7,
+          "type": "MOGE_MODEL",
+          "link": null
+        },
+        {
+          "name": "rail",
+          "type": "STRING",
+          "widget": {
+            "name": "rail"
+          },
+          "link": 148
+        },
+        {
+          "name": "set_name",
+          "type": "STRING",
+          "widget": {
+            "name": "set_name"
+          },
+          "link": 149
+        }
+      ],
+      "outputs": [
+        {
+          "name": "hires_dir",
+          "type": "STRING",
+          "slot_index": 0,
+          "links": null
+        },
+        {
+          "name": "proxy_frames",
+          "type": "IMAGE",
+          "slot_index": 1,
+          "links": [
+            166
+          ]
+        },
+        {
+          "name": "gate_masks",
+          "type": "IMAGE",
+          "slot_index": 2,
+          "links": null
+        },
+        {
+          "name": "report",
+          "type": "STRING",
+          "slot_index": 3,
+          "links": null
+        },
+        {
+          "name": "proxy_dir",
+          "type": "STRING",
+          "slot_index": 4,
+          "links": null
+        }
+      ],
+      "title": "HiRes Composite - camplot_path3",
+      "properties": {
+        "aux_id": "mickmumpitz/ComfyUI-SplatKit",
+        "ver": "afebf27519a225eca1d9ffe3affd58b8b6bfd1b5",
+        "Node name for S&R": "SplatKit_HiResComposite"
+      },
+      "widgets_values": [
+        "",
+        "",
+        2,
+        8192,
+        "geometry",
+        "0-80/2",
+        2048,
+        2,
+        6,
+        1440,
+        "geometry_res",
+        "auto (download)",
+        4,
+        1024,
+        false,
+        false
+      ]
+    },
+    {
+      "id": 82,
+      "type": "SplatKit_HiResComposite",
+      "pos": [
+        3800,
+        2231.8222097733437
+      ],
+      "size": [
+        480,
+        640
+      ],
+      "flags": {},
+      "order": 61,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "panorama_hires",
+          "type": "IMAGE",
+          "link": 152
+        },
+        {
+          "name": "panorama_geometry",
+          "type": "IMAGE",
+          "link": 153
+        },
+        {
+          "name": "wan_frames",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": 156
+        },
+        {
+          "name": "upscale_model",
+          "shape": 7,
+          "type": "UPSCALE_MODEL",
+          "link": 157
+        },
+        {
+          "name": "moge_model",
+          "shape": 7,
+          "type": "MOGE_MODEL",
+          "link": null
+        },
+        {
+          "name": "rail",
+          "type": "STRING",
+          "widget": {
+            "name": "rail"
+          },
+          "link": 154
+        },
+        {
+          "name": "set_name",
+          "type": "STRING",
+          "widget": {
+            "name": "set_name"
+          },
+          "link": 155
+        }
+      ],
+      "outputs": [
+        {
+          "name": "hires_dir",
+          "type": "STRING",
+          "slot_index": 0,
+          "links": null
+        },
+        {
+          "name": "proxy_frames",
+          "type": "IMAGE",
+          "slot_index": 1,
+          "links": [
+            167
+          ]
+        },
+        {
+          "name": "gate_masks",
+          "type": "IMAGE",
+          "slot_index": 2,
+          "links": null
+        },
+        {
+          "name": "report",
+          "type": "STRING",
+          "slot_index": 3,
+          "links": null
+        },
+        {
+          "name": "proxy_dir",
+          "type": "STRING",
+          "slot_index": 4,
+          "links": null
+        }
+      ],
+      "title": "HiRes Composite - camplot_path4",
+      "properties": {
+        "aux_id": "mickmumpitz/ComfyUI-SplatKit",
+        "ver": "afebf27519a225eca1d9ffe3affd58b8b6bfd1b5",
+        "Node name for S&R": "SplatKit_HiResComposite"
+      },
+      "widgets_values": [
+        "",
+        "",
+        3,
+        8192,
+        "geometry",
+        "0-80/2",
+        2048,
+        2,
+        6,
+        1440,
+        "geometry_res",
+        "auto (download)",
+        4,
+        1024,
+        false,
+        false
+      ]
+    },
+    {
+      "id": 83,
+      "type": "SplatKit_HiResComposite",
+      "pos": [
+        3800,
+        2931.8222097733437
+      ],
+      "size": [
+        480,
+        640
+      ],
+      "flags": {},
+      "order": 64,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "panorama_hires",
+          "type": "IMAGE",
+          "link": 158
+        },
+        {
+          "name": "panorama_geometry",
+          "type": "IMAGE",
+          "link": 159
+        },
+        {
+          "name": "wan_frames",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": 162
+        },
+        {
+          "name": "upscale_model",
+          "shape": 7,
+          "type": "UPSCALE_MODEL",
+          "link": 163
+        },
+        {
+          "name": "moge_model",
+          "shape": 7,
+          "type": "MOGE_MODEL",
+          "link": null
+        },
+        {
+          "name": "rail",
+          "type": "STRING",
+          "widget": {
+            "name": "rail"
+          },
+          "link": 160
+        },
+        {
+          "name": "set_name",
+          "type": "STRING",
+          "widget": {
+            "name": "set_name"
+          },
+          "link": 161
+        }
+      ],
+      "outputs": [
+        {
+          "name": "hires_dir",
+          "type": "STRING",
+          "slot_index": 0,
+          "links": null
+        },
+        {
+          "name": "proxy_frames",
+          "type": "IMAGE",
+          "slot_index": 1,
+          "links": null
+        },
+        {
+          "name": "gate_masks",
+          "type": "IMAGE",
+          "slot_index": 2,
+          "links": null
+        },
+        {
+          "name": "report",
+          "type": "STRING",
+          "slot_index": 3,
+          "links": null
+        },
+        {
+          "name": "proxy_dir",
+          "type": "STRING",
+          "slot_index": 4,
+          "links": null
+        }
+      ],
+      "title": "HiRes Composite - camplot_path5  (MUTED)",
+      "properties": {
+        "aux_id": "mickmumpitz/ComfyUI-SplatKit",
+        "ver": "afebf27519a225eca1d9ffe3affd58b8b6bfd1b5",
+        "Node name for S&R": "SplatKit_HiResComposite"
+      },
+      "widgets_values": [
+        "",
+        "",
+        4,
+        8192,
+        "geometry",
+        "0-80/2",
+        2048,
+        2,
+        6,
+        1440,
+        "geometry_res",
+        "auto (download)",
+        4,
+        1024,
+        false,
+        false
+      ]
+    },
+    {
+      "id": 17,
+      "type": "KSampler",
+      "pos": [
+        1290,
+        200
+      ],
+      "size": [
+        300,
+        416
+      ],
+      "flags": {},
+      "order": 43,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "link": 5
+        },
+        {
+          "name": "positive",
+          "type": "CONDITIONING",
+          "link": 19
+        },
+        {
+          "name": "negative",
+          "type": "CONDITIONING",
+          "link": 20
+        },
+        {
+          "name": "latent_image",
+          "type": "LATENT",
+          "link": 21
+        },
+        {
+          "name": "steps",
+          "type": "INT",
+          "widget": {
+            "name": "steps"
+          },
+          "link": 173
+        }
+      ],
+      "outputs": [
+        {
+          "name": "LATENT",
+          "type": "LATENT",
+          "slot_index": 0,
+          "links": [
+            22
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.24.0",
+        "Node name for S&R": "KSampler"
+      },
+      "widgets_values": [
+        0,
+        "fixed",
+        4,
+        1,
+        "euler",
+        "normal",
+        1
+      ]
+    },
+    {
+      "id": 78,
+      "type": "UpscaleModelLoader",
+      "pos": [
+        2980,
+        871.8222097733436
+      ],
+      "size": [
+        400,
+        60
+      ],
+      "flags": {},
+      "order": 13,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "UPSCALE_MODEL",
+          "type": "UPSCALE_MODEL",
+          "slot_index": 0,
+          "links": [
+            139,
+            145,
+            151,
+            157,
+            163
+          ]
+        }
+      ],
+      "title": "Upscaler for the WAN hole-fill",
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.30.0",
+        "Node name for S&R": "UpscaleModelLoader"
+      },
+      "widgets_values": [
+        "4x-UltraSharp.pth"
+      ]
+    },
+    {
+      "id": 80,
+      "type": "SplatKit_HiResComposite",
+      "pos": [
+        3800,
+        831.8222097733436
+      ],
+      "size": [
+        480,
+        640
+      ],
+      "flags": {},
+      "order": 56,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "panorama_hires",
+          "type": "IMAGE",
+          "link": 140
+        },
+        {
+          "name": "panorama_geometry",
+          "type": "IMAGE",
+          "link": 141
+        },
+        {
+          "name": "wan_frames",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": 144
+        },
+        {
+          "name": "upscale_model",
+          "shape": 7,
+          "type": "UPSCALE_MODEL",
+          "link": 145
+        },
+        {
+          "name": "moge_model",
+          "shape": 7,
+          "type": "MOGE_MODEL",
+          "link": null
+        },
+        {
+          "name": "rail",
+          "type": "STRING",
+          "widget": {
+            "name": "rail"
+          },
+          "link": 142
+        },
+        {
+          "name": "set_name",
+          "type": "STRING",
+          "widget": {
+            "name": "set_name"
+          },
+          "link": 143
+        }
+      ],
+      "outputs": [
+        {
+          "name": "hires_dir",
+          "type": "STRING",
+          "slot_index": 0,
+          "links": null
+        },
+        {
+          "name": "proxy_frames",
+          "type": "IMAGE",
+          "slot_index": 1,
+          "links": [
+            165
+          ]
+        },
+        {
+          "name": "gate_masks",
+          "type": "IMAGE",
+          "slot_index": 2,
+          "links": null
+        },
+        {
+          "name": "report",
+          "type": "STRING",
+          "slot_index": 3,
+          "links": null
+        },
+        {
+          "name": "proxy_dir",
+          "type": "STRING",
+          "slot_index": 4,
+          "links": null
+        }
+      ],
+      "title": "HiRes Composite - camplot_path2",
+      "properties": {
+        "aux_id": "mickmumpitz/ComfyUI-SplatKit",
+        "ver": "afebf27519a225eca1d9ffe3affd58b8b6bfd1b5",
+        "Node name for S&R": "SplatKit_HiResComposite"
+      },
+      "widgets_values": [
+        "",
+        "",
+        1,
+        8192,
+        "geometry",
+        "0-80/2",
+        2048,
+        2,
+        6,
+        1440,
+        "geometry_res",
+        "auto (download)",
+        4,
+        1024,
+        false,
+        false
+      ]
+    },
+    {
+      "id": 3,
+      "type": "LoadImage",
+      "pos": [
+        -250,
+        200
+      ],
+      "size": [
+        420,
+        330
+      ],
+      "flags": {},
+      "order": 14,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "slot_index": 0,
+          "links": [
+            9,
+            28,
+            34,
+            47,
+            81,
+            118,
+            125,
+            134,
+            135,
+            140,
+            141,
+            146,
+            147,
+            152,
+            153,
+            158,
+            159
+          ]
+        },
+        {
+          "name": "MASK",
+          "type": "MASK",
+          "slot_index": 1,
+          "links": null
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.24.0",
+        "Node name for S&R": "LoadImage"
+      },
+      "widgets_values": [
+        "studio_garden.jpg",
+        "image"
+      ],
+      "color": "#E0E0E0FF",
+      "bgcolor": "#FFFFFFFF"
+    },
+    {
+      "id": 10,
+      "type": "CLIPTextEncode",
+      "pos": [
+        -250,
+        760
+      ],
+      "size": [
+        420,
+        130
+      ],
+      "flags": {},
+      "order": 17,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "clip",
+          "type": "CLIP",
+          "link": 6
+        }
+      ],
+      "outputs": [
+        {
+          "name": "CONDITIONING",
+          "type": "CONDITIONING",
+          "slot_index": 0,
+          "links": [
+            12,
+            35,
+            48,
+            86,
+            105
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.24.0",
+        "Node name for S&R": "CLIPTextEncode"
+      },
+      "widgets_values": [
+        "A high quality panoramic video of the scene, photorealistic, very clear, smooth camera movement, ultra-detailed, high resolution. Panorama."
+      ],
+      "color": "#E0E0E0FF",
+      "bgcolor": "#FFFFFFFF"
+    },
+    {
+      "id": 84,
+      "type": "SplatKit_SphereSfMDatasetDualRes",
+      "pos": [
+        4380,
+        131.82220977334362
+      ],
+      "size": [
+        480,
+        620
+      ],
+      "flags": {},
+      "order": 69,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "pano_frames_1",
+          "type": "IMAGE",
+          "link": 164
+        },
+        {
+          "name": "pano_frames_2",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": 165
+        },
+        {
+          "name": "pano_frames_3",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": 166
+        },
+        {
+          "name": "pano_frames_4",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": 167
+        },
+        {
+          "name": "hires_dir",
+          "type": "STRING",
+          "widget": {
+            "name": "hires_dir"
+          },
+          "link": 168
+        },
+        {
+          "name": "output_name",
+          "type": "STRING",
+          "widget": {
+            "name": "output_name"
+          },
+          "link": 172
+        }
+      ],
+      "outputs": [
+        {
+          "name": "model_dir",
+          "type": "STRING",
+          "slot_index": 0,
+          "links": null
+        },
+        {
+          "name": "num_images",
+          "type": "INT",
+          "slot_index": 1,
+          "links": null
+        },
+        {
+          "name": "num_points",
+          "type": "INT",
+          "slot_index": 2,
+          "links": null
+        }
+      ],
+      "title": "Build the COLMAP dataset from the composites (dual-res)",
+      "properties": {
+        "aux_id": "mickmumpitz/ComfyUI-SplatKit",
+        "ver": "afebf27519a225eca1d9ffe3affd58b8b6bfd1b5",
+        "Node name for S&R": "SplatKit_SphereSfMDatasetDualRes"
+      },
+      "widgets_values": [
+        "",
+        "my_scene_hires",
+        "exhaustive",
+        "stop",
+        0,
+        8192,
+        0.0066,
+        10,
+        32768,
+        4,
+        1.5,
+        4,
+        30,
+        1,
+        "camera_major",
+        "*.png",
+        1,
+        0
+      ]
+    },
+    {
+      "id": 79,
+      "type": "SplatKit_HiResComposite",
+      "pos": [
+        3800,
+        131.82220977334362
+      ],
+      "size": [
+        480,
+        640
+      ],
+      "flags": {},
+      "order": 54,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "panorama_hires",
+          "type": "IMAGE",
+          "link": 134
+        },
+        {
+          "name": "panorama_geometry",
+          "type": "IMAGE",
+          "link": 135
+        },
+        {
+          "name": "wan_frames",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": 138
+        },
+        {
+          "name": "upscale_model",
+          "shape": 7,
+          "type": "UPSCALE_MODEL",
+          "link": 139
+        },
+        {
+          "name": "moge_model",
+          "shape": 7,
+          "type": "MOGE_MODEL",
+          "link": null
+        },
+        {
+          "name": "rail",
+          "type": "STRING",
+          "widget": {
+            "name": "rail"
+          },
+          "link": 136
+        },
+        {
+          "name": "set_name",
+          "type": "STRING",
+          "widget": {
+            "name": "set_name"
+          },
+          "link": 137
+        }
+      ],
+      "outputs": [
+        {
+          "name": "hires_dir",
+          "type": "STRING",
+          "slot_index": 0,
+          "links": [
+            168
+          ]
+        },
+        {
+          "name": "proxy_frames",
+          "type": "IMAGE",
+          "slot_index": 1,
+          "links": [
+            164
+          ]
+        },
+        {
+          "name": "gate_masks",
+          "type": "IMAGE",
+          "slot_index": 2,
+          "links": null
+        },
+        {
+          "name": "report",
+          "type": "STRING",
+          "slot_index": 3,
+          "links": null
+        },
+        {
+          "name": "proxy_dir",
+          "type": "STRING",
+          "slot_index": 4,
+          "links": null
+        }
+      ],
+      "title": "HiRes Composite - camplot_path1",
+      "properties": {
+        "aux_id": "mickmumpitz/ComfyUI-SplatKit",
+        "ver": "afebf27519a225eca1d9ffe3affd58b8b6bfd1b5",
+        "Node name for S&R": "SplatKit_HiResComposite"
+      },
+      "widgets_values": [
+        "",
+        "",
+        0,
+        8192,
+        "geometry",
+        "0-80/2",
+        2048,
+        2,
+        6,
+        1440,
+        "geometry_res",
+        "auto (download)",
+        4,
+        1024,
+        false,
+        false
+      ]
+    },
+    {
+      "id": 41,
+      "type": "SplatKit_DatasetProject",
+      "pos": [
+        -250,
+        580
+      ],
+      "size": [
+        420,
+        130
+      ],
+      "flags": {},
+      "order": 15,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "dataset_dir",
+          "type": "STRING",
+          "links": [
+            68,
+            69,
+            70,
+            80,
+            82,
+            119,
+            127,
+            137,
+            143,
+            149,
+            155,
+            161,
+            172
+          ]
+        },
+        {
+          "name": "control_rgb_prefix",
+          "type": "STRING",
+          "links": [
+            72,
+            73,
+            78,
+            79,
+            100,
+            116,
+            130,
+            131,
+            132,
+            133
+          ]
+        },
+        {
+          "name": "control_mask_prefix",
+          "type": "STRING",
+          "links": null
+        }
+      ],
+      "properties": {
+        "aux_id": "mickmumpitz/ComfyUI-SplatKit",
+        "ver": "2c4d23360b5d29ee0feca88a336097c641119135",
+        "Node name for S&R": "SplatKit_DatasetProject"
+      },
+      "widgets_values": [
+        "250_studio-garden",
+        false
+      ],
+      "color": "#E0E0E0FF",
+      "bgcolor": "#FFFFFFFF"
+    },
+    {
+      "id": 86,
+      "type": "PrimitiveInt",
+      "pos": [
+        904.967242975153,
+        -79.67399137643474
+      ],
+      "size": [
+        270,
+        82
+      ],
+      "flags": {},
+      "order": 16,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "INT",
+          "type": "INT",
+          "links": null
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.30.0",
+        "Node name for S&R": "PrimitiveInt"
+      },
+      "widgets_values": [
+        0,
+        "fixed"
+      ]
+    },
+    {
+      "id": 34,
+      "type": "SplatKit_CameraPlotRenderControlGeo",
+      "pos": [
+        290,
+        1940
+      ],
+      "size": [
+        539.5833190917969,
+        712
+      ],
+      "flags": {
+        "collapsed": false
+      },
+      "order": 23,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "panorama",
+          "type": "IMAGE",
+          "link": 47
+        },
+        {
+          "name": "moge_model",
+          "shape": 7,
+          "type": "MOGE_MODEL",
+          "link": null
+        },
+        {
+          "name": "dataset_dir",
+          "shape": 7,
+          "type": "STRING",
+          "widget": {
+            "name": "dataset_dir"
+          },
+          "link": 70
+        }
+      ],
+      "outputs": [
+        {
+          "name": "control_video",
+          "type": "IMAGE",
+          "links": [
+            51,
+            54
+          ]
+        },
+        {
+          "name": "control_mask",
+          "type": "IMAGE",
+          "links": [
+            52
+          ]
+        },
+        {
+          "name": "condition_dir",
+          "type": "STRING",
+          "links": null
+        },
+        {
+          "name": "camera_preview",
+          "type": "IMAGE",
+          "links": null
+        },
+        {
+          "name": "rail_json",
+          "type": "STRING",
+          "slot_index": 4,
+          "links": [
+            148
+          ]
+        }
+      ],
+      "properties": {
+        "aux_id": "mickmumpitz/ComfyUI-SplatKit",
+        "ver": "2c4d23360b5d29ee0feca88a336097c641119135",
+        "Node name for S&R": "SplatKit_CameraPlotRenderControlGeo"
+      },
+      "widgets_values": [
+        "0.000, 0.000, 0.000, 0.680, 0.147, -3.399\n0.722, 0.269, -0.919, 0.949, 0.516, -2.589\n-0.536, 0.679, -0.779, -0.484, 0.661, -3.067",
+        "per_point_look",
+        81,
+        "camplot_path3",
+        4000,
+        "",
+        "auto (download)",
+        "",
+        null,
+        null
+      ]
     }
   ],
   "links": [
@@ -4136,14 +4960,6 @@
       "INT"
     ],
     [
-      104,
-      55,
-      0,
-      17,
-      4,
-      "INT"
-    ],
-    [
       105,
       10,
       0,
@@ -4358,6 +5174,302 @@
       22,
       1,
       "STRING"
+    ],
+    [
+      134,
+      3,
+      0,
+      79,
+      0,
+      "IMAGE"
+    ],
+    [
+      135,
+      3,
+      0,
+      79,
+      1,
+      "IMAGE"
+    ],
+    [
+      136,
+      27,
+      4,
+      79,
+      5,
+      "STRING"
+    ],
+    [
+      137,
+      41,
+      0,
+      79,
+      6,
+      "STRING"
+    ],
+    [
+      138,
+      18,
+      0,
+      79,
+      2,
+      "IMAGE"
+    ],
+    [
+      139,
+      78,
+      0,
+      79,
+      3,
+      "UPSCALE_MODEL"
+    ],
+    [
+      140,
+      3,
+      0,
+      80,
+      0,
+      "IMAGE"
+    ],
+    [
+      141,
+      3,
+      0,
+      80,
+      1,
+      "IMAGE"
+    ],
+    [
+      142,
+      29,
+      4,
+      80,
+      5,
+      "STRING"
+    ],
+    [
+      143,
+      41,
+      0,
+      80,
+      6,
+      "STRING"
+    ],
+    [
+      144,
+      39,
+      0,
+      80,
+      2,
+      "IMAGE"
+    ],
+    [
+      145,
+      78,
+      0,
+      80,
+      3,
+      "UPSCALE_MODEL"
+    ],
+    [
+      146,
+      3,
+      0,
+      81,
+      0,
+      "IMAGE"
+    ],
+    [
+      147,
+      3,
+      0,
+      81,
+      1,
+      "IMAGE"
+    ],
+    [
+      148,
+      34,
+      4,
+      81,
+      5,
+      "STRING"
+    ],
+    [
+      149,
+      41,
+      0,
+      81,
+      6,
+      "STRING"
+    ],
+    [
+      150,
+      40,
+      0,
+      81,
+      2,
+      "IMAGE"
+    ],
+    [
+      151,
+      78,
+      0,
+      81,
+      3,
+      "UPSCALE_MODEL"
+    ],
+    [
+      152,
+      3,
+      0,
+      82,
+      0,
+      "IMAGE"
+    ],
+    [
+      153,
+      3,
+      0,
+      82,
+      1,
+      "IMAGE"
+    ],
+    [
+      154,
+      47,
+      4,
+      82,
+      5,
+      "STRING"
+    ],
+    [
+      155,
+      41,
+      0,
+      82,
+      6,
+      "STRING"
+    ],
+    [
+      156,
+      50,
+      0,
+      82,
+      2,
+      "IMAGE"
+    ],
+    [
+      157,
+      78,
+      0,
+      82,
+      3,
+      "UPSCALE_MODEL"
+    ],
+    [
+      158,
+      3,
+      0,
+      83,
+      0,
+      "IMAGE"
+    ],
+    [
+      159,
+      3,
+      0,
+      83,
+      1,
+      "IMAGE"
+    ],
+    [
+      160,
+      62,
+      4,
+      83,
+      5,
+      "STRING"
+    ],
+    [
+      161,
+      41,
+      0,
+      83,
+      6,
+      "STRING"
+    ],
+    [
+      162,
+      57,
+      0,
+      83,
+      2,
+      "IMAGE"
+    ],
+    [
+      163,
+      78,
+      0,
+      83,
+      3,
+      "UPSCALE_MODEL"
+    ],
+    [
+      164,
+      79,
+      1,
+      84,
+      0,
+      "IMAGE"
+    ],
+    [
+      165,
+      80,
+      1,
+      84,
+      1,
+      "IMAGE"
+    ],
+    [
+      166,
+      81,
+      1,
+      84,
+      2,
+      "IMAGE"
+    ],
+    [
+      167,
+      82,
+      1,
+      84,
+      3,
+      "IMAGE"
+    ],
+    [
+      168,
+      79,
+      0,
+      84,
+      4,
+      "STRING"
+    ],
+    [
+      172,
+      41,
+      0,
+      84,
+      5,
+      "STRING"
+    ],
+    [
+      173,
+      55,
+      0,
+      17,
+      4,
+      "INT"
     ]
   ],
   "groups": [
@@ -4449,8 +5561,8 @@
       "id": 8,
       "title": "CREATE COLMAP DATASET",
       "bounding": [
-        2300,
-        100,
+        2263.1462079279013,
+        -1314.9622592530684,
         520,
         690
       ],
@@ -4461,13 +5573,13 @@
   "config": {},
   "extra": {
     "ds": {
-      "scale": 0.7400249944258408,
+      "scale": 1.3109994191500443,
       "offset": [
-        273.0953259392775,
-        -2041.3554900693994
+        -284.1343069372747,
+        -1868.9600376176759
       ]
     },
-    "frontendVersion": "1.47.12",
+    "frontendVersion": "1.48.6",
     "VHS_latentpreview": true,
     "VHS_latentpreviewrate": 0,
     "VHS_MetadataImage": true,

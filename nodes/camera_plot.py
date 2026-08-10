@@ -325,16 +325,27 @@ class CameraPlotRenderControlGeo:
                 "moge_ckpt": _moge_ckpt_input(),
                 "moge_model": _moge_model_input(),
             },
+            # The graph node id, so each Camera Plot's rail gets its own filename even
+            # when two nodes share an output_name -- which the shipped workflow itself
+            # does (two nodes both named camplot_path4). Naming the rail after
+            # output_name alone would let those two silently overwrite each other, and
+            # an overwritten rail is unrecoverable: the composite needs the exact path
+            # its WAN clip was flown along, and nothing else on disk records it.
+            "hidden": {"unique_id": "UNIQUE_ID"},
         }
 
-    RETURN_TYPES = ("IMAGE", "IMAGE", "STRING", "IMAGE")
-    RETURN_NAMES = ("control_video", "control_mask", "condition_dir", "camera_preview")
+    # rail_json is appended LAST so saved workflows keep their output indices. It is
+    # the path to THIS node's camera rail -- wire it into HiRes Composite, which has to
+    # reproject the source through the exact path its WAN clip was flown along.
+    RETURN_TYPES = ("IMAGE", "IMAGE", "STRING", "IMAGE", "STRING")
+    RETURN_NAMES = ("control_video", "control_mask", "condition_dir", "camera_preview",
+                    "rail_json")
     FUNCTION = "render"
     CATEGORY = "SplatKit"
 
     def render(self, panorama, anchors, orientation, length,
                output_name="comfy_camplot", point_budget=4000,
-               dataset_dir="", moge_ckpt=_MOGE_AUTO, moge_model=None):
+               dataset_dir="", moge_ckpt=_MOGE_AUTO, moge_model=None, unique_id=None):
         # WYSIWYG: anchors are literal scene coordinates at unit gain, so the rendered
         # path tracks the editor overlay exactly. Not user-settable -- see the docstring.
         scale_mode, movement_scale = "absolute_literal", 1.0
@@ -380,9 +391,26 @@ class CameraPlotRenderControlGeo:
         base = dataset_dir if dataset_dir else _p2s_output_base(output_name)
         work = os.path.join(base, "_work")
         os.makedirs(work, exist_ok=True)
-        rail_json = os.path.join(work, "camplot_rail.json")
+        # Per-node copy FIRST: several Camera Plot nodes in one graph normally share a
+        # dataset_dir, so the plain camplot_rail.json is overwritten by whichever ran
+        # last and only one trajectory's rail survives. The HiRes Composite needs the
+        # rail belonging to ITS clip, so write a durable copy and hand its path back as
+        # the rail_json output. The unsuffixed file is still written for anything that
+        # reads it by its old name.
+        #
+        # The name carries the NODE ID as well as output_name, because output_name is
+        # not reliably unique -- the shipped workflow has two Camera Plot nodes both
+        # named camplot_path4, and naming on that alone would let them overwrite each
+        # other exactly as before. Losing a rail is unrecoverable: nothing else on disk
+        # records the path a given WAN clip was flown along.
+        safe = _safe_ref_name(output_name)
+        node_tag = _safe_ref_name(unique_id) if unique_id is not None else "node"
+        rail_json = os.path.join(work, f"camplot_rail_{safe}_{node_tag}.json")
+        rail_payload = w2c.tolist()
         with open(rail_json, "w", encoding="utf-8") as f:
-            json.dump(w2c.tolist(), f)
+            json.dump(rail_payload, f)
+        with open(os.path.join(work, "camplot_rail.json"), "w", encoding="utf-8") as f:
+            json.dump(rail_payload, f)
 
         # --- render the control video along OUR rail (preset_rail path) ------
         print(f"[CameraPlot] {anchor_pts.shape[0]} anchors -> {int(length)} frames; "
@@ -428,7 +456,10 @@ class CameraPlotRenderControlGeo:
                   f"condition writes: {_tC - _tB:.2f}s | "
                   f"preview+tensors: {_tD - _tC:.2f}s", flush=True)
         print(f"[CameraPlot] {anchor_pts.shape[0]} anchors -> {int(length)}-frame "
-              f"{orientation} fly-through; condition -> {cond}")
+              f"{orientation} fly-through; condition -> {cond}\n"
+              f"[CameraPlot] rail -> {rail_json}\n"
+              f"[CameraPlot]   (this node's own copy. Wire the rail_json output into "
+              f"HiRes Composite -- it is the only record of the path this clip flew.)")
 
         # Cache the geometry cloud for this node's editor overlay (best-effort: never
         # let a cloud failure break the render the user actually queued). The editor
@@ -440,7 +471,7 @@ class CameraPlotRenderControlGeo:
         except Exception as e:
             print(f"[CameraPlotGeo] scene-ref cloud skipped ({e})")
 
-        return (rgb, mask, cond, preview)
+        return (rgb, mask, cond, preview, rail_json)
 
 
 # ---------------------------------------------------------------------------#

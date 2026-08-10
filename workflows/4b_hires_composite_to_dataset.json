@@ -1,0 +1,205 @@
+{
+  "id": "wf4b-composite-dataset",
+  "revision": 0,
+  "last_node_id": 10,
+  "last_link_id": 1,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "Note",
+      "pos": [
+        20,
+        -420
+      ],
+      "size": [
+        900,
+        400
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "properties": {
+        "Node name for S&R": "Note"
+      },
+      "widgets_values": [
+        "4b - COMPOSITE -> COLMAP DATASET (dual-res: proxies pose it, the 8K frames train it)\n\nSame shape as 2b2. SfM runs on the small proxies -- SPHERE poses are ANGULAR, so posing gains\nnothing from 8K, and keeping it small is what makes EXHAUSTIVE matching affordable. The pinhole\ncube faces LichtFeld actually trains on are reprojected from the 8K composites, read off disk\none at a time (loading them into a ComfyUI tensor would be ~33 GB).\n\nWIRING\n  1. Loader 'directory'  -> <ComfyUI>/output/hires_composite/proxies      (select_every_nth = 1)\n  2. hires_dir           -> <ComfyUI>/output/hires_composite/frames\n  3. output_name         -> whatever you want the dataset folder called\nBoth folders hold the SAME frames in the SAME sorted order, because 4a names them\ntraj00_frame_0000.png, traj01_frame_0000.png, ... -- that is why every trajectory shares one\nfolder and gets its own traj_index.\n\nMATCHER = exhaustive   matches ALL pairs, so the separate trajectories fuse into ONE model.\n                       (sequential only links temporally adjacent frames -> 4 separate rooms.)\nON_SPLIT = stop        if it still forms more than one model the node raises with the\n                       per-model breakdown and reprojects nothing, instead of silently\n                       training on the biggest fragment.\nface_size = 0          auto (~equirect_width/4), so 8192 equirects give 2048px faces.\n\nTHEN TRAIN -- and do not leave the cap at its default:\n  LichtFeld-Studio.exe -d \"<dataset>\" -o \"<dataset>\\splat\" --headless --train --no-splash ^\n      --eval --test-every 8 -r 1 --max-width 4096 --max-cap 3000000\n\n--max-cap 3000000 is load-bearing. Every run in the research project silently stopped at\nLichtFeld's 1M default, which was hiding the resolution gain: 1M -> 3M buys +0.62 dB and\n+3.8 render detail. 3M -> 6M buys +0.06 dB for 60% more training time -- not worth it.\n\nWHAT TO EXPECT, AND WHAT NOT TO\nFailures land on glass, mirrors and depth silhouettes, because MoGe is accurate to ~2% on\nordinary surfaces and wrong on those. More camera paths will NOT fix that -- every path\nreprojects the same depth map, so no camera path fixes a mirror. Extra paths DO buy a larger\nexplorable volume, which is worth having on its own terms."
+      ],
+      "color": "#432",
+      "bgcolor": "#653"
+    },
+    {
+      "id": 3,
+      "type": "VHS_LoadImagesPath",
+      "pos": [
+        20,
+        40
+      ],
+      "size": [
+        400,
+        260
+      ],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "meta_batch",
+          "type": "VHS_BatchManager",
+          "link": null,
+          "shape": 7
+        }
+      ],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            1
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "MASK",
+          "type": "MASK",
+          "links": null,
+          "slot_index": 1
+        },
+        {
+          "name": "frame_count",
+          "type": "INT",
+          "links": null,
+          "slot_index": 2
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfyui-videohelpersuite",
+        "Node name for S&R": "VHS_LoadImagesPath"
+      },
+      "widgets_values": {
+        "directory": "D:\\comfy\\ComfyUI\\output\\hires_composite\\proxies",
+        "image_load_cap": 0,
+        "skip_first_images": 0,
+        "select_every_nth": 1,
+        "videopreview": {
+          "hidden": false,
+          "paused": false,
+          "params": {
+            "image_load_cap": 0,
+            "skip_first_images": 0,
+            "select_every_nth": 1
+          }
+        }
+      },
+      "title": "Load the PROXIES (the frames SfM poses)"
+    },
+    {
+      "id": 4,
+      "type": "SplatKit_SphereSfMDatasetDualRes",
+      "pos": [
+        470,
+        40
+      ],
+      "size": [
+        480,
+        580
+      ],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "pano_frames_1",
+          "type": "IMAGE",
+          "link": 1
+        },
+        {
+          "name": "pano_frames_2",
+          "type": "IMAGE",
+          "link": null,
+          "shape": 7
+        },
+        {
+          "name": "pano_frames_3",
+          "type": "IMAGE",
+          "link": null,
+          "shape": 7
+        },
+        {
+          "name": "pano_frames_4",
+          "type": "IMAGE",
+          "link": null,
+          "shape": 7
+        }
+      ],
+      "outputs": [
+        {
+          "name": "model_dir",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 0
+        },
+        {
+          "name": "num_images",
+          "type": "INT",
+          "links": null,
+          "slot_index": 1
+        },
+        {
+          "name": "num_points",
+          "type": "INT",
+          "links": null,
+          "slot_index": 2
+        }
+      ],
+      "properties": {
+        "aux_id": "mickmumpitz/ComfyUI-SplatKit",
+        "Node name for S&R": "SplatKit_SphereSfMDatasetDualRes"
+      },
+      "widgets_values": [
+        "D:\\comfy\\ComfyUI\\output\\hires_composite\\frames",
+        "hires_composite_dataset",
+        "exhaustive",
+        "stop",
+        0,
+        8192,
+        0.0066,
+        10.0,
+        32768,
+        4.0,
+        1.5,
+        4.0,
+        30,
+        1.0,
+        "camera_major",
+        "*.png",
+        1,
+        0
+      ],
+      "title": "SphereSfM Dataset (Dual-Res) - hires_dir = the 8K composites"
+    }
+  ],
+  "links": [
+    [
+      1,
+      3,
+      0,
+      4,
+      0,
+      "IMAGE"
+    ]
+  ],
+  "groups": [],
+  "config": {},
+  "extra": {
+    "ds": {
+      "scale": 0.75,
+      "offset": [
+        0,
+        0
+      ]
+    }
+  },
+  "version": 0.4
+}
