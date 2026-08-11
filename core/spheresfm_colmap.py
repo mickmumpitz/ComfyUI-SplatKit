@@ -684,13 +684,46 @@ def _existing_frame_indices(equ_dir):
     return sorted(idxs)
 
 
+def _equirect_grid_of(dir_path):
+    """(w, h) of the first frame_*.png in dir_path, or None."""
+    fr = sorted(glob.glob(os.path.join(dir_path, "frame_*.png")))
+    if not fr:
+        return None
+    try:
+        from PIL import Image as _PILImage
+        with _PILImage.open(fr[0]) as im:
+            return im.size
+    except Exception:
+        return None
+
+
+def _resolve_add_equirect(work_dir):
+    """Which scratch equirect folder the SfM database's keypoints live in, and whether
+    this dataset is dual-res.
+
+    run_spheresfm stages one folder, ``equirect``. run_spheresfm_dualres stages TWO:
+    ``equirect_lowres`` (what features were extracted from -> what the DB and the poses
+    are in) and ``equirect_hires`` (what the trainable cube faces were reprojected from).
+
+    -> (equ_low_dir, equ_hi_dir_or_None, is_dual).
+    """
+    plain = os.path.join(work_dir, "equirect")
+    if os.path.isdir(plain):
+        return plain, None, False
+    lo = os.path.join(work_dir, "equirect_lowres")
+    hi = os.path.join(work_dir, "equirect_hires")
+    if os.path.isdir(lo) and os.path.isdir(hi):
+        return lo, hi, True
+    return plain, None, False          # missing -> caller reports it
+
+
 def add_to_spheresfm(frames, dataset_dir, exe_path="",
                      matcher_type="exhaustive", adjust_existing_cameras=False,
                      retriangulate=True, max_num_features=8192,
                      peak_threshold=0.0066, edge_threshold=10.0, first_octave=0,
                      max_num_matches=32768, abs_pose_min_num_inliers=30,
                      face_size=0, image_order="camera_major",
-                     new_trajectory_lengths=None):
+                     new_trajectory_lengths=None, hires_paths=None):
     """Incrementally register NEW equirect frames into an EXISTING SphereSfM dataset,
     then refresh the pinhole cube-face COLMAP dataset in place.
 
@@ -720,12 +753,22 @@ def add_to_spheresfm(frames, dataset_dir, exe_path="",
     ``<dataset>/sparse/0`` is replaced with the extended reconstruction; the
     p2s_dataset.json marker's sequences / trajectory_lengths / counts are updated.
 
+    DUAL-RES datasets (built by run_spheresfm_dualres) are supported by passing
+    ``hires_paths``: the hi-res equirect FILES for the new frames, already strided, in the
+    same order as ``frames``. There the scratch dir holds ``equirect_lowres`` (what the DB
+    and poses are in) and ``equirect_hires`` (what the faces are reprojected from), and the
+    build left the model's SPHERE camera rescaled to the hi-res grid. Registration must
+    happen against a LOW-RES-grid camera or the new views are solved along wrong rays, so
+    the base camera is rescaled back down first, and only a throwaway copy is rescaled up
+    again for step 6's reprojection. The promoted base model is therefore always left on
+    the low-res grid, which is what makes a second add chain correctly.
+
     Returns {'model_dir','image_dir','sparse_dir','num_images','num_points','num_frames',
              'num_added_frames','num_registered_images'}.
     """
     dataset_dir = os.path.abspath(dataset_dir)
     work_dir = os.path.join(dataset_dir, "_spheresfm_work")
-    equ_dir = os.path.join(work_dir, "equirect")
+    equ_dir, equ_hi_dir, dual = _resolve_add_equirect(work_dir)
     db = os.path.join(work_dir, "database.db")
     sparse_root = os.path.join(work_dir, "sparse")
     base_model = _largest_sparse_model(sparse_root)
@@ -743,8 +786,43 @@ def add_to_spheresfm(frames, dataset_dir, exe_path="",
             "colmap_now (that run keeps _spheresfm_work), then add to it. (panorama_only "
             "datasets and ones whose _spheresfm_work was deleted cannot be extended.)")
 
+    # --- dual-res bookkeeping ------------------------------------------------
+    # equ_dir is the LOW-RES grid in a dual-res dataset; the faces come from equ_hi_dir.
+    lo_grid = _equirect_grid_of(equ_dir)
+    hi_grid = _equirect_grid_of(equ_hi_dir) if dual else None
+    if dual:
+        if not hires_paths:
+            raise RuntimeError(
+                "[SphereSfM/add] this dataset was built by the DUAL-RES SfM path "
+                "(_spheresfm_work has equirect_lowres + equirect_hires), so the new frames "
+                "need a hi-res counterpart too -- the cube faces are reprojected from the "
+                "hi-res equirects, not from the frames wired in.\n"
+                "Use the 'SphereSfM Add Camera Path (Dual-Res)' node and point its "
+                "hires_dir/hires_glob at the new trajectory's composite frames.")
+        if len(hires_paths) != len(frames):
+            raise RuntimeError(
+                "[SphereSfM/add] dual-res count mismatch: %d new low-res frame(s) vs %d "
+                "hi-res file(s). They must be the SAME set in the SAME order after "
+                "striding." % (len(frames), len(hires_paths)))
+        if hi_grid is None or lo_grid is None:
+            raise RuntimeError("[SphereSfM/add] could not read the scratch equirect grids "
+                               "under " + work_dir)
+    elif hires_paths:
+        print("[SphereSfM/add] hires_paths given but this is a SINGLE-RES dataset "
+              "(_spheresfm_work/equirect) -- ignoring them; the wired frames are both the "
+              "posed frames and the reprojection source.")
+        hires_paths = None
+
     exe = find_colmap_sphere(exe_path)
     env = _subprocess_env(exe)
+
+    if dual:
+        # The build rescaled the model's SPHERE camera UP to the hi-res grid, but the
+        # database's keypoints are still low-res pixels. Put the camera back on the grid
+        # the features were measured in before anything registers against it -- otherwise
+        # the new views are solved along rays that are wrong by the resolution ratio.
+        # Nothing below reads it at hi-res: step 6 rescales a throwaway copy instead.
+        _rescale_sphere_cameras(base_model, lo_grid[0], lo_grid[1])
 
     try:
         from comfy.utils import ProgressBar
@@ -771,6 +849,37 @@ def add_to_spheresfm(frames, dataset_dir, exe_path="",
     num_added = len(new_names)
     print("[SphereSfM/add] appended %d new equirect frames (%dx%d) as %s..%s to %s"
           % (num_added, w, h, new_names[0], new_names[-1], equ_dir))
+
+    if dual:
+        if (w, h) != tuple(lo_grid):
+            raise RuntimeError(
+                "[SphereSfM/add] the new frames are %dx%d but this dataset's SfM grid is "
+                "%dx%d. Features are matched against a database extracted at the SfM grid, "
+                "so the new frames must be the SAME size as the ones the base run posed -- "
+                "wire the HiRes Composite's proxy_frames (and give it the same proxy_width "
+                "the base trajectories used)." % (w, h, lo_grid[0], lo_grid[1]))
+        # Stage the matching hi-res equirects under the SAME frame numbers, so step 6 can
+        # reproject the whole extended model -- old and new frames alike -- from 8K.
+        from PIL import Image as _PILImage
+        for i, src in enumerate(hires_paths):
+            with _PILImage.open(src) as im:
+                if im.size != tuple(hi_grid):
+                    raise RuntimeError(
+                        "[SphereSfM/add] hi-res frame %s is %dx%d but the dataset's existing "
+                        "hi-res equirects are %dx%d. One SPHERE camera is shared by every "
+                        "frame, so they must all be the same grid -- set the new HiRes "
+                        "Composite's output_width to %d."
+                        % (os.path.basename(src), im.size[0], im.size[1],
+                           hi_grid[0], hi_grid[1], hi_grid[0]))
+            dst = os.path.join(equ_hi_dir, "frame_%05d.png" % (first_new + i))
+            if os.path.exists(dst):
+                os.remove(dst)
+            try:
+                os.link(src, dst)
+            except Exception:
+                shutil.copyfile(src, dst)
+        print("[SphereSfM/add] staged %d hi-res equirects (%dx%d) -> %s"
+              % (num_added, hi_grid[0], hi_grid[1], equ_hi_dir))
 
     sift_args = [
         "--SiftExtraction.max_num_features", str(int(max_num_features)),
@@ -862,11 +971,27 @@ def add_to_spheresfm(frames, dataset_dir, exe_path="",
         os.remove(stale_fp)
 
     # 6) reproject the WHOLE extended model to pinhole cube faces.
+    #
+    # Dual-res: sample the 8K set, which needs the SPHERE camera on the hi-res grid. Do
+    # that on a THROWAWAY copy so the promoted base model stays on the low-res grid the
+    # database's keypoints are in -- that is what lets a second add register against it.
     cubic_dir = os.path.join(work_dir, "cubic_inc")
     if os.path.isdir(cubic_dir):
         shutil.rmtree(cubic_dir, ignore_errors=True)
-    repro = ["sphere_cubic_reprojecer", "--image_path", equ_dir,
-             "--input_path", base_model, "--output_path", cubic_dir]
+    repro_src, repro_model = equ_dir, base_model
+    if dual:
+        repro_model = os.path.join(work_dir, "sparse_inc_hires")
+        if os.path.isdir(repro_model):
+            shutil.rmtree(repro_model, ignore_errors=True)
+        os.makedirs(repro_model, exist_ok=True)
+        for b in ("cameras.bin", "images.bin", "points3D.bin"):
+            src = os.path.join(base_model, b)
+            if os.path.isfile(src):
+                shutil.copy2(src, os.path.join(repro_model, b))
+        _rescale_sphere_cameras(repro_model, hi_grid[0], hi_grid[1])
+        repro_src = equ_hi_dir
+    repro = ["sphere_cubic_reprojecer", "--image_path", repro_src,
+             "--input_path", repro_model, "--output_path", cubic_dir]
     if int(face_size) > 0:
         repro += ["--image_size", str(int(face_size))]
     _run(exe, repro, env)
@@ -906,20 +1031,28 @@ def add_to_spheresfm(frames, dataset_dir, exe_path="",
 
     # Extend the marker's trajectory list, then recompute the camera-major sub-videos over
     # the FULL dataset so the upscale workflow still gets coherent per-view sequences.
-    prev_traj = []
+    prev = {}
     try:
         with open(os.path.join(dataset_dir, MARKER_NAME), "r", encoding="utf-8") as f:
-            prev_traj = json.load(f).get("trajectory_lengths") or []
+            prev = json.load(f) or {}
     except Exception:
-        prev_traj = []
+        prev = {}
+    prev_traj = prev.get("trajectory_lengths") or []
     if sum(prev_traj) != base_n_frames:
         prev_traj = [base_n_frames]                 # fall back to one base group
     all_traj = list(prev_traj) + [int(x) for x in (new_trajectory_lengths or [num_added])]
     sequences, faces_per_frame = _build_camera_sequences(image_dir, all_traj)
+    # write_marker rewrites the file wholesale, so carry the dual-res fields the base run
+    # recorded -- they describe how the dataset was made and the add does not change them.
+    dual_extra = {}
+    if dual:
+        dual_extra = {"dualres": True,
+                      "sfm_resolution": [int(lo_grid[0]), int(lo_grid[1])],
+                      "reproject_resolution": [int(hi_grid[0]), int(hi_grid[1])]}
     write_marker(dataset_dir, "spheresfm_colmap", images_subdir="images",
                  image_order=image_order, faces_per_frame=int(faces_per_frame),
                  num_frames=int(total_frames), num_images=int(total_faces),
-                 trajectory_lengths=all_traj, sequences=sequences)
+                 trajectory_lengths=all_traj, sequences=sequences, **dual_extra)
 
     print("[SphereSfM/add] merged %d cube faces (%d new frames) -> %d total frames, "
           "%d images, %d points in %s" % (moved, num_added, total_frames, total_faces,

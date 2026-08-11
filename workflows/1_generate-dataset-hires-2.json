@@ -2,7 +2,7 @@
   "id": "wf1c-generate-dataset-hires",
   "revision": 0,
   "last_node_id": 89,
-  "last_link_id": 174,
+  "last_link_id": 175,
   "nodes": [
     {
       "id": 30,
@@ -1947,7 +1947,7 @@
       "title": "Model download links",
       "properties": {},
       "widgets_values": [
-        "**pano_video_gen_720p_comfy.safetensors**\n\nPanoramic (360° / equirectangular) video-generation LoRA — the core of the flythrough. Strength 0.98.\n\n⚠️ Download link: distributed with the SplatKit workflow package — <add link>\n\n📁 ComfyUI/models/loras"
+        "**pano_video_gen_720p_comfy.safetensors**\n\nPanoramic (360\u00b0 / equirectangular) video-generation LoRA \u2014 the core of the flythrough. Strength 0.98.\n\n\u26a0\ufe0f Download link: distributed with the SplatKit workflow package \u2014 <add link>\n\n\ud83d\udcc1 ComfyUI/models/loras"
       ],
       "color": "#97651BFF",
       "bgcolor": "#B67921FF"
@@ -1971,7 +1971,7 @@
       "title": "Model download links",
       "properties": {},
       "widgets_values": [
-        "**Wan2_1-I2V-14B-720P_fp8_e4m3fn.safetensors**\n\nWan 2.1 Image-to-Video 14B (720p) — the main video diffusion model (UNET Loader).\n\n[https://huggingface.co/Kijai/WanVideo_comfy/blob/main/Wan2_1-I2V-14B-720P_fp8_e4m3fn.safetensors](https://huggingface.co/Kijai/WanVideo_comfy/blob/main/Wan2_1-I2V-14B-720P_fp8_e4m3fn.safetensors)\n\n📁 ComfyUI/models/diffusion_models/wan"
+        "**Wan2_1-I2V-14B-720P_fp8_e4m3fn.safetensors**\n\nWan 2.1 Image-to-Video 14B (720p) \u2014 the main video diffusion model (UNET Loader).\n\n[https://huggingface.co/Kijai/WanVideo_comfy/blob/main/Wan2_1-I2V-14B-720P_fp8_e4m3fn.safetensors](https://huggingface.co/Kijai/WanVideo_comfy/blob/main/Wan2_1-I2V-14B-720P_fp8_e4m3fn.safetensors)\n\n\ud83d\udcc1 ComfyUI/models/diffusion_models/wan"
       ],
       "color": "#97651BFF",
       "bgcolor": "#B67921FF"
@@ -1994,7 +1994,7 @@
       "outputs": [],
       "properties": {},
       "widgets_values": [
-        "# SplatKit — Camera Plot Flythrough (End User Guide)\n\n## Overview\n\nThis workflow turns a **single 360° panorama** into a **COLMAP / SfM dataset** for 3D Gaussian Splatting. It does this by generating several **camera-path flythroughs** through the scene: each camera plot renders a geometry-based control video from the panorama, drives a **Wan 2.1 I2V** generation along that path, and the resulting panoramic frames from every plot are fused into one SphereSfM dataset.\n\n**Input:** one equirectangular panorama (e.g. `pano_360_*.png`).\n**Output:** generated flythrough videos per camera plot **+** a reconstructed COLMAP dataset ready for splatting.\n\n### Color legend (how to read the canvas)\n\n| Zone color | Meaning |\n|---|---|\n| **White / Grey** | Model loaders, project setup, and the COLMAP dataset builder |\n| **Green** | Your inputs (panorama image, prompts, steps) |\n| **Purple** | The camera plots — one group per camera path |\n\n---\n\n## Required Custom Nodes\n\n| Node Pack | Used for |\n|-----------|----------|\n| **ComfyUI-SplatKit** | All `SplatKit_*` nodes: `DatasetProject`, `CameraPlotRenderControlGeo`, `WanI2VMaskedConditioning`, `SphereSfMDataset`, `SphereSfMAddToDataset`. |\n| **Mickmumpitz-Nodes** | The on-canvas title labels. |\n\nEverything else (loaders, KSampler, VAE Decode, Create/Save Video) is **built-in ComfyUI**.\n\n---\n\n## Required Models\n\nSee the orange **Model download links** cards to the right for exact URLs and target folders.\n\n| Model file | Loader | Purpose |\n|------|--------|---------|\n| **Wan2_1-I2V-14B-720P_fp8_e4m3fn.safetensors** | UNET Loader | Main image-to-video model. |\n| **umt5_xxl_fp8_e4m3fn_scaled.safetensors** | CLIP Loader (type `wan`) | Text encoder. |\n| **clip_vision_h.safetensors** | CLIP Vision Loader | Image conditioning. |\n| **wan_2.1_vae.safetensors** | VAE Loader | Encode / decode latents. |\n| **pano_video_gen_720p_comfy.safetensors** | LoRA (strength **0.98**) | Panoramic video LoRA — keep enabled. |\n| **lightx2v_..._distill_v2_lora_rank64_bf16.safetensors** | LoRA (strength **1.00**) | Step-distill LoRA for fast few-step sampling. |\n\n---\n\n## 1. Load the Models\n\nIn the grey **LOAD DIFFUSION MODELS** zone, load the six models above. Both LoRAs are pre-wired — leave the strengths as set (**0.98** pano, **1.00** lightx2v).\n\n## 2. Project Setup (green **SETUP** zone)\n\n1. **Panorama** — load your 360° equirectangular image in the `Load Image` node.\n2. **Dataset Project** (`SplatKit_DatasetProject`) — set the project name (e.g. `warm-throneroom-02`). This one field drives all the output folders and control-frame prefixes automatically; nothing is hardcoded to your machine.\n3. **Prompts** — a positive prompt describing the scene and a negative prompt for quality.\n4. **STEPS** — sampling steps (shared by every camera plot). With the lightx2v LoRA this stays low (default **8**).\n\n## 3. Camera Plots (the purple groups)\n\nEach **purple group is one camera path**. Inside a group:\n\n- **Camera Plot / Render Control Geo** — paste the camera path (one keyframe per line: `x, y, z` positions, optionally with a `look-at` target) and choose the look mode (`look_forward`, `per_point_look`, …). It renders the control video + mask from the panorama geometry.\n- **Wan Conditioning** → **KSampler** → **VAE Decode** generate the flythrough along that path.\n- Two **Save Video** nodes preview the **control** pass and the **final** generated pass.\n\nYou can **duplicate** a group to add another path, **mute** a group to skip it, and **rename** it. Every group reuses the same models, prompts and steps, so you only edit the camera path per group.\n\n## 4. Create the COLMAP Dataset (white **CREATE COLMAP DATASET** zone)\n\n`SplatKit_SphereSfMDataset` collects the initial panorama plus the generated frames from every camera plot and builds a **SphereSfM / COLMAP** dataset. `SplatKit_SphereSfMAddToDataset` can append an extra camera path to an existing dataset. The result is ready for downstream 3D Gaussian Splatting.\n\n---\n\n## Recommended Order\n\n1. Load the six models.\n2. Set the **Dataset Project** name and load your **panorama**.\n3. Write the **prompts** and confirm **STEPS**.\n4. Define each **camera path** in the purple plots (duplicate / mute as needed).\n5. Run — each plot renders its flythrough and everything is fused into the COLMAP dataset."
+        "# SplatKit \u2014 Camera Plot Flythrough (End User Guide)\n\n## Overview\n\nThis workflow turns a **single 360\u00b0 panorama** into a **COLMAP / SfM dataset** for 3D Gaussian Splatting. It does this by generating several **camera-path flythroughs** through the scene: each camera plot renders a geometry-based control video from the panorama, drives a **Wan 2.1 I2V** generation along that path, and the resulting panoramic frames from every plot are fused into one SphereSfM dataset.\n\n**Input:** one equirectangular panorama (e.g. `pano_360_*.png`).\n**Output:** generated flythrough videos per camera plot **+** a reconstructed COLMAP dataset ready for splatting.\n\n### Color legend (how to read the canvas)\n\n| Zone color | Meaning |\n|---|---|\n| **White / Grey** | Model loaders, project setup, and the COLMAP dataset builder |\n| **Green** | Your inputs (panorama image, prompts, steps) |\n| **Purple** | The camera plots \u2014 one group per camera path |\n\n---\n\n## Required Custom Nodes\n\n| Node Pack | Used for |\n|-----------|----------|\n| **ComfyUI-SplatKit** | All `SplatKit_*` nodes: `DatasetProject`, `CameraPlotRenderControlGeo`, `WanI2VMaskedConditioning`, `SphereSfMDataset`, `SphereSfMAddToDataset`. |\n| **Mickmumpitz-Nodes** | The on-canvas title labels. |\n\nEverything else (loaders, KSampler, VAE Decode, Create/Save Video) is **built-in ComfyUI**.\n\n---\n\n## Required Models\n\nSee the orange **Model download links** cards to the right for exact URLs and target folders.\n\n| Model file | Loader | Purpose |\n|------|--------|---------|\n| **Wan2_1-I2V-14B-720P_fp8_e4m3fn.safetensors** | UNET Loader | Main image-to-video model. |\n| **umt5_xxl_fp8_e4m3fn_scaled.safetensors** | CLIP Loader (type `wan`) | Text encoder. |\n| **clip_vision_h.safetensors** | CLIP Vision Loader | Image conditioning. |\n| **wan_2.1_vae.safetensors** | VAE Loader | Encode / decode latents. |\n| **pano_video_gen_720p_comfy.safetensors** | LoRA (strength **0.98**) | Panoramic video LoRA \u2014 keep enabled. |\n| **lightx2v_..._distill_v2_lora_rank64_bf16.safetensors** | LoRA (strength **1.00**) | Step-distill LoRA for fast few-step sampling. |\n\n---\n\n## 1. Load the Models\n\nIn the grey **LOAD DIFFUSION MODELS** zone, load the six models above. Both LoRAs are pre-wired \u2014 leave the strengths as set (**0.98** pano, **1.00** lightx2v).\n\n## 2. Project Setup (green **SETUP** zone)\n\n1. **Panorama** \u2014 load your 360\u00b0 equirectangular image in the `Load Image` node.\n2. **Dataset Project** (`SplatKit_DatasetProject`) \u2014 set the project name (e.g. `warm-throneroom-02`). This one field drives all the output folders and control-frame prefixes automatically; nothing is hardcoded to your machine.\n3. **Prompts** \u2014 a positive prompt describing the scene and a negative prompt for quality.\n4. **STEPS** \u2014 sampling steps (shared by every camera plot). With the lightx2v LoRA this stays low (default **8**).\n\n## 3. Camera Plots (the purple groups)\n\nEach **purple group is one camera path**. Inside a group:\n\n- **Camera Plot / Render Control Geo** \u2014 paste the camera path (one keyframe per line: `x, y, z` positions, optionally with a `look-at` target) and choose the look mode (`look_forward`, `per_point_look`, \u2026). It renders the control video + mask from the panorama geometry.\n- **Wan Conditioning** \u2192 **KSampler** \u2192 **VAE Decode** generate the flythrough along that path.\n- Two **Save Video** nodes preview the **control** pass and the **final** generated pass.\n\nYou can **duplicate** a group to add another path, **mute** a group to skip it, and **rename** it. Every group reuses the same models, prompts and steps, so you only edit the camera path per group.\n\n## 4. Create the COLMAP Dataset (white **CREATE COLMAP DATASET** zone)\n\n`SplatKit_SphereSfMDataset` collects the initial panorama plus the generated frames from every camera plot and builds a **SphereSfM / COLMAP** dataset. `SplatKit_SphereSfMAddToDataset` can append an extra camera path to an existing dataset. The result is ready for downstream 3D Gaussian Splatting.\n\n---\n\n## Recommended Order\n\n1. Load the six models.\n2. Set the **Dataset Project** name and load your **panorama**.\n3. Write the **prompts** and confirm **STEPS**.\n4. Define each **camera path** in the purple plots (duplicate / mute as needed).\n5. Run \u2014 each plot renders its flythrough and everything is fused into the COLMAP dataset."
       ],
       "color": "#97651BFF",
       "bgcolor": "#B67921FF"
@@ -2107,7 +2107,7 @@
       "title": "Model download links",
       "properties": {},
       "widgets_values": [
-        "**lightx2v_T2V_14B_cfg_step_distill_v2_lora_rank64_bf16.safetensors**\n\nLightX2V CFG/step-distill LoRA — enables fast few-step sampling. Strength 1.00.\n\n[https://huggingface.co/Kijai/WanVideo_comfy/blob/main/Lightx2v/lightx2v_T2V_14B_cfg_step_distill_v2_lora_rank64_bf16.safetensors](https://huggingface.co/Kijai/WanVideo_comfy/blob/main/Lightx2v/lightx2v_T2V_14B_cfg_step_distill_v2_lora_rank64_bf16.safetensors)\n\n📁 ComfyUI/models/loras"
+        "**lightx2v_T2V_14B_cfg_step_distill_v2_lora_rank64_bf16.safetensors**\n\nLightX2V CFG/step-distill LoRA \u2014 enables fast few-step sampling. Strength 1.00.\n\n[https://huggingface.co/Kijai/WanVideo_comfy/blob/main/Lightx2v/lightx2v_T2V_14B_cfg_step_distill_v2_lora_rank64_bf16.safetensors](https://huggingface.co/Kijai/WanVideo_comfy/blob/main/Lightx2v/lightx2v_T2V_14B_cfg_step_distill_v2_lora_rank64_bf16.safetensors)\n\n\ud83d\udcc1 ComfyUI/models/loras"
       ],
       "color": "#97651BFF",
       "bgcolor": "#B67921FF"
@@ -2131,7 +2131,7 @@
       "title": "Model download links",
       "properties": {},
       "widgets_values": [
-        "**umt5_xxl_fp8_e4m3fn_scaled.safetensors**\n\nUMT5-XXL text encoder for Wan (CLIP Loader, type `wan`).\n\n[https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/blob/main/split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors](https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/blob/main/split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors)\n\n📁 ComfyUI/models/text_encoders"
+        "**umt5_xxl_fp8_e4m3fn_scaled.safetensors**\n\nUMT5-XXL text encoder for Wan (CLIP Loader, type `wan`).\n\n[https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/blob/main/split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors](https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/blob/main/split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors)\n\n\ud83d\udcc1 ComfyUI/models/text_encoders"
       ],
       "color": "#97651BFF",
       "bgcolor": "#B67921FF"
@@ -2155,7 +2155,7 @@
       "title": "Model download links",
       "properties": {},
       "widgets_values": [
-        "**clip_vision_h.safetensors**\n\nCLIP-Vision H encoder for image conditioning (CLIP Vision Loader).\n\n[https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/blob/main/split_files/clip_vision/clip_vision_h.safetensors](https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/blob/main/split_files/clip_vision/clip_vision_h.safetensors)\n\n📁 ComfyUI/models/clip_vision"
+        "**clip_vision_h.safetensors**\n\nCLIP-Vision H encoder for image conditioning (CLIP Vision Loader).\n\n[https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/blob/main/split_files/clip_vision/clip_vision_h.safetensors](https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/blob/main/split_files/clip_vision/clip_vision_h.safetensors)\n\n\ud83d\udcc1 ComfyUI/models/clip_vision"
       ],
       "color": "#97651BFF",
       "bgcolor": "#B67921FF"
@@ -2179,7 +2179,7 @@
       "title": "Model download links",
       "properties": {},
       "widgets_values": [
-        "**wan_2.1_vae.safetensors**\n\nWan 2.1 VAE (VAE Loader).\n\n[https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/blob/main/split_files/vae/wan_2.1_vae.safetensors](https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/blob/main/split_files/vae/wan_2.1_vae.safetensors)\n\n📁 ComfyUI/models/vae"
+        "**wan_2.1_vae.safetensors**\n\nWan 2.1 VAE (VAE Loader).\n\n[https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/blob/main/split_files/vae/wan_2.1_vae.safetensors](https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/blob/main/split_files/vae/wan_2.1_vae.safetensors)\n\n\ud83d\udcc1 ComfyUI/models/vae"
       ],
       "color": "#97651BFF",
       "bgcolor": "#B67921FF"
@@ -3774,7 +3774,9 @@
           "name": "hires_dir",
           "type": "STRING",
           "slot_index": 0,
-          "links": null
+          "links": [
+            175
+          ]
         },
         {
           "name": "proxy_frames",
@@ -3833,14 +3835,14 @@
     },
     {
       "id": 65,
-      "type": "SplatKit_SphereSfMAddToDataset",
+      "type": "SplatKit_SphereSfMAddToDatasetDualRes",
       "pos": [
         2820,
         3700
       ],
       "size": [
         460,
-        470
+        520
       ],
       "flags": {},
       "order": 68,
@@ -3877,42 +3879,48 @@
             "name": "dataset_dir"
           },
           "link": 127
+        },
+        {
+          "name": "hires_dir",
+          "type": "STRING",
+          "widget": {
+            "name": "hires_dir"
+          },
+          "link": 175
         }
       ],
       "outputs": [
         {
           "name": "model_dir",
           "type": "STRING",
-          "slot_index": 0,
-          "links": []
+          "links": null
         },
         {
           "name": "num_images",
           "type": "INT",
-          "slot_index": 1,
           "links": null
         },
         {
           "name": "num_points",
           "type": "INT",
-          "slot_index": 2,
           "links": null
         },
         {
           "name": "num_added_frames",
           "type": "INT",
-          "slot_index": 3,
           "links": null
         }
       ],
-      "title": "SphereSfM Add Camera Path to Dataset",
+      "title": "SphereSfM Add Camera Path to Dataset (Dual-Res)",
       "properties": {
         "aux_id": "mickmumpitz/ComfyUI-SplatKit",
         "ver": "ae95eb77db2687a8d858f1e825d540bfff2e4677",
-        "Node name for S&R": "SplatKit_SphereSfMAddToDataset"
+        "Node name for S&R": "SplatKit_SphereSfMAddToDatasetDualRes"
       },
       "widgets_values": [
         "",
+        "",
+        "traj04_*.png",
         1,
         0,
         "exhaustive",
@@ -5296,6 +5304,14 @@
       65,
       0,
       "IMAGE"
+    ],
+    [
+      175,
+      83,
+      0,
+      65,
+      5,
+      "STRING"
     ]
   ],
   "groups": [

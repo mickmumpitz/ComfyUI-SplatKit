@@ -1742,6 +1742,213 @@ class SphereSfMDatasetDualRes:
         return (res["model_dir"], res["num_images"], res["num_points"])
 
 
+class SphereSfMAddToDatasetDualRes:
+    """ADD one more camera path to an existing DUAL-RES SphereSfM dataset.
+
+    The dual-res counterpart of 'SphereSfM Add Camera Path to Dataset'. That node assumes
+    the frames it is given are BOTH what SfM poses and what the trainable cube faces are
+    cut from -- true for a single-res dataset, false for a dual-res one, where poses come
+    from the small proxies and the faces are reprojected from the 8K composites on disk.
+    Pointed at a dual-res dataset it simply cannot find the scratch folder it expects.
+
+    This node takes both halves, exactly like the dual-res build node:
+
+        HiRes Composite (traj_index=4) ──> hires_dir  ──┐
+                                      └──> proxy_frames ─┴──> this node ──> dataset grows
+
+    WIRING (the add section at the bottom of workflow 1)
+      * ``dataset_dir`` -- the Dataset Project node's dataset_dir, i.e. the same dataset
+        the dual-res build node wrote.
+      * ``pano_frames_1`` -- the new trajectory's ``proxy_frames``. Must be the SAME
+        resolution as the proxies the base build was posed on (same proxy_width).
+      * ``hires_dir`` + ``hires_glob`` -- the new trajectory's 8K composites. Every
+        HiRes Composite of one scene writes into ONE folder, named
+        ``traj<NN>_frame_*.png``, so the glob MUST select only the new trajectory:
+        ``traj04_*.png`` for traj_index=4. A bare ``*.png`` picks up the trajectories
+        already in the dataset and the count check will stop you.
+
+    Everything else matches the single-res add node: the existing cameras stay FIXED by
+    default (purely additive), the new path has to SHARE VIEW with the existing scene for
+    SfM to link it in, and each successful add is promoted so a further path can chain on.
+    Run it BEFORE upscaling the dataset.
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "dataset_dir": ("STRING", {"default": "",
+                    "tooltip": "The EXISTING dual-res dataset to grow -- wire the Dataset "
+                               "Project node's dataset_dir (the same value the dual-res build "
+                               "node used as output_name)."}),
+                "pano_frames_1": ("IMAGE", {
+                    "tooltip": "The NEW trajectory's proxy_frames from its HiRes Composite. "
+                               "Must be the same resolution as the proxies the base dataset "
+                               "was posed on."}),
+                "hires_dir": ("STRING", {"default": "",
+                    "tooltip": "The HiRes Composite's hires_dir output -- the folder holding "
+                               "the 8K composites. Shared by every trajectory of the scene, so "
+                               "narrow it to the new one with hires_glob."}),
+            },
+            "optional": {
+                "pano_frames_2": ("IMAGE", {"tooltip": "Optional second new trajectory; concatenated after pano_frames_1."}),
+                "pano_frames_3": ("IMAGE", {"tooltip": "Optional third new trajectory."}),
+                "pano_frames_4": ("IMAGE", {"tooltip": "Optional fourth new trajectory."}),
+                "hires_glob": ("STRING", {"default": "traj04_*.png",
+                    "tooltip": "Glob selecting ONLY the new trajectory's files inside "
+                               "hires_dir. HiRes Composite names them traj<NN>_frame_*.png, so "
+                               "traj04_*.png is trajectory index 4. Its sorted order and COUNT "
+                               "must match the frames wired in above, 1:1, BEFORE striding."}),
+                "frame_stride": ("INT", {"default": 1, "min": 1, "max": 100, "step": 1,
+                    "tooltip": "Use every Nth new frame. Stride HERE, not in a loader: this "
+                               "thins the proxies and the matching 8K files together."}),
+                "max_frames": ("INT", {"default": 0, "min": 0, "max": 1000, "step": 1,
+                    "tooltip": "Cap NEW frames after stride (0 = no cap)."}),
+                "matcher_type": (["exhaustive", "sequential"], {"default": "exhaustive",
+                    "tooltip": "exhaustive (default) matches the new frames against the "
+                               "EXISTING ones too, which is what lets a separate path link "
+                               "into the reconstruction. Keep it unless the new clip is a "
+                               "direct temporal continuation of the last one."}),
+                "adjust_existing_cameras": ("BOOLEAN", {"default": False,
+                    "tooltip": "OFF (default): existing poses stay FIXED, only the new faces "
+                               "are written. ON: let a global solve refine them (re-renders "
+                               "EVERY cube face from 8K -- slow)."}),
+                "retriangulate": ("BOOLEAN", {"default": True,
+                    "tooltip": "Run point_triangulator so the new images contribute 3D points."}),
+                "face_size": ("INT", {"default": 0, "min": 0, "max": 8192, "step": 64,
+                    "tooltip": "Cube-face resolution (px). 0 = COLMAP default off the 8K "
+                               "SPHERE camera. Set the SAME value the base build used."}),
+                "max_num_features": ("INT", {"default": 8192, "min": 1024, "max": 32768, "step": 1024}),
+                "peak_threshold": ("FLOAT", {"default": 0.0066, "min": 0.0, "max": 0.1, "step": 0.0001}),
+                "edge_threshold": ("FLOAT", {"default": 10.0, "min": 1.0, "max": 50.0, "step": 1.0}),
+                "max_num_matches": ("INT", {"default": 32768, "min": 4096, "max": 131072, "step": 4096}),
+                "abs_pose_min_num_inliers": ("INT", {"default": 30, "min": 10, "max": 200, "step": 5,
+                    "tooltip": "Min verified inliers to register a new image. Lower if the new "
+                               "frames won't register; raise for stricter."}),
+                "image_order": (["camera_major", "frame_major"], {"default": "camera_major"}),
+            },
+        }
+
+    RETURN_TYPES = ("STRING", "INT", "INT", "INT")
+    RETURN_NAMES = ("model_dir", "num_images", "num_points", "num_added_frames")
+    FUNCTION = "run"
+    OUTPUT_NODE = True       # terminal: updates the COLMAP dataset on disk
+    CATEGORY = "SplatKit"
+
+    def run(self, dataset_dir="", pano_frames_1=None, hires_dir="",
+            pano_frames_2=None, pano_frames_3=None, pano_frames_4=None,
+            hires_glob="traj04_*.png", frame_stride=1, max_frames=0,
+            matcher_type="exhaustive", adjust_existing_cameras=False, retriangulate=True,
+            face_size=0, max_num_features=8192, peak_threshold=0.0066,
+            edge_threshold=10.0, max_num_matches=32768, abs_pose_min_num_inliers=30,
+            image_order="camera_major"):
+        import glob as _glob
+        import re as _re
+
+        import numpy as np
+
+        from ..core import spheresfm_colmap as ss
+        from .common import _resolve_existing_dataset
+
+        if not (dataset_dir or "").strip():
+            raise RuntimeError("[DualResAdd] dataset_dir is empty -- wire the Dataset Project "
+                               "node's dataset_dir (or type the existing dataset name).")
+        ds_dir = _resolve_existing_dataset(dataset_dir)
+        if not os.path.isdir(ds_dir):
+            raise RuntimeError(f"[DualResAdd] dataset folder does not exist:\n  {ds_dir}\n"
+                               "Build it first with the 'SphereSfM Dataset (Dual-Res)' node.")
+
+        hires_dir = (hires_dir or "").strip().strip('"')
+        if not hires_dir:
+            raise RuntimeError("[DualResAdd] hires_dir is empty -- wire the new HiRes "
+                               "Composite's hires_dir output. (For a SINGLE-res dataset use "
+                               "the plain 'SphereSfM Add Camera Path to Dataset' node "
+                               "instead; this one exists for the 8K reprojection source.)")
+        if not os.path.isdir(hires_dir):
+            raise RuntimeError(f"[DualResAdd] hires_dir not found: {hires_dir!r}")
+
+        # Same trap as the dual-res build node: a BYPASSED (ctrl+B) upstream node forwards
+        # its own IMAGE input, so an unused slot silently carries the source panorama.
+        batches = [b for b in (pano_frames_1, pano_frames_2, pano_frames_3, pano_frames_4)
+                   if b is not None]
+        if not batches:
+            raise RuntimeError("[DualResAdd] no frames connected -- wire the new HiRes "
+                               "Composite's proxy_frames into pano_frames_1.")
+        shapes = [tuple(int(x) for x in b.shape[1:3]) for b in batches]
+        if len(set(shapes)) > 1:
+            listing = ", ".join(f"pano_frames_{i + 1}={s[1]}x{s[0]}"
+                                for i, s in enumerate(shapes))
+            raise RuntimeError(
+                f"[DualResAdd] the wired trajectories are not the same size: {listing}. "
+                "DISCONNECT unused pano_frames_* links -- do not bypass (ctrl+B) the "
+                "upstream node, a bypassed node passes its own image input through.")
+
+        batch_lens = [int(b.shape[0]) for b in batches]
+        frames = np.clip(np.concatenate([b.cpu().numpy() for b in batches], axis=0)
+                         * 255.0, 0, 255).astype(np.uint8)      # RGB
+        n_all = len(frames)
+
+        # Thin the concatenated clip here so the 8K files are thinned by the SAME indices.
+        idx = list(range(0, n_all, max(1, int(frame_stride))))
+        if max_frames and len(idx) > int(max_frames):
+            sel = np.linspace(0, len(idx) - 1, int(max_frames)).round().astype(int)
+            idx = [idx[i] for i in sorted(set(sel.tolist()))]
+        if len(idx) < 2:
+            raise RuntimeError(f"[DualResAdd] only {len(idx)} frame(s) left after "
+                               f"frame_stride={frame_stride} / max_frames={max_frames}; "
+                               "at least 2 are needed to add a path.")
+
+        hires_paths = sorted(_glob.glob(os.path.join(hires_dir, hires_glob)))
+        if len(hires_paths) != n_all:
+            # The scene's trajectories share one frames/ folder, so the usual cause is a
+            # glob that also matched the trajectories already in the dataset. Name the
+            # per-trajectory prefixes actually present rather than making them look.
+            groups = {}
+            for p in _glob.glob(os.path.join(hires_dir, "*.png")):
+                m = _re.match(r"(traj\d+)_", os.path.basename(p))
+                if m:
+                    groups[m.group(1)] = groups.get(m.group(1), 0) + 1
+            hint = ("\n  Trajectories present in that folder: "
+                    + ", ".join(f"{k}_*.png ({v} frames)" for k, v in sorted(groups.items()))
+                    + "\n  Set hires_glob to the NEW trajectory's prefix only."
+                    ) if groups else ""
+            raise RuntimeError(
+                f"[DualResAdd] count mismatch: {n_all} frame(s) wired in vs "
+                f"{len(hires_paths)} file(s) matching {hires_glob!r} in {hires_dir}. Both "
+                "sides must be the SAME set in the SAME order BEFORE striding." + hint)
+        hires_paths = [hires_paths[i] for i in idx]
+
+        # Per-trajectory counts AFTER striding, so the marker splits the sub-videos right.
+        cum = np.cumsum([0] + batch_lens)
+        traj_of = [int(np.searchsorted(cum, oi, side="right") - 1) for oi in idx]
+        new_trajectory_lengths = [sum(1 for t in traj_of if t == bi)
+                                  for bi in range(len(batches))]
+        if len(idx) < n_all:
+            print(f"[DualResAdd] frame_stride={frame_stride}"
+                  + (f" / max_frames={max_frames}" if max_frames else "")
+                  + f" -> {len(idx)} of {n_all} new frames used (8K files thinned to match).")
+        frames = frames[idx]
+
+        res = ss.add_to_spheresfm(
+            frames, dataset_dir=ds_dir, hires_paths=hires_paths,
+            matcher_type=matcher_type,
+            adjust_existing_cameras=bool(adjust_existing_cameras),
+            retriangulate=bool(retriangulate),
+            max_num_features=int(max_num_features), peak_threshold=float(peak_threshold),
+            edge_threshold=float(edge_threshold), max_num_matches=int(max_num_matches),
+            abs_pose_min_num_inliers=int(abs_pose_min_num_inliers),
+            face_size=int(face_size), image_order=image_order,
+            new_trajectory_lengths=new_trajectory_lengths)
+        print(f"[DualResAdd] added {res['num_added_frames']} frames "
+              f"({res['num_registered_images']} registered) -> {res['num_frames']} total "
+              f"frames, {res['num_images']} images, {res['num_points']} points\n"
+              f"  {res['model_dir']}\n"
+              f"  Train (pinhole, NO --gut): LichtFeld-Studio.exe -d \"{res['model_dir']}\" "
+              f"-o <out> --headless --train --strategy mcmc --max-cap 3000000 --sh-degree 2")
+        return (res["model_dir"], res["num_images"], res["num_points"],
+                res["num_added_frames"])
+
+
 NODE_CLASS_MAPPINGS = {
     "SplatKit_ResolveDatasetImages": ResolveDatasetImages,
     "SplatKit_LoadDatasetImagesOrdered": LoadDatasetImagesOrdered,
@@ -1750,6 +1957,7 @@ NODE_CLASS_MAPPINGS = {
     "SplatKit_SaveUpscaledDataset": SaveUpscaledDataset,
     "SplatKit_SaveUpscaledFramesStreaming": SaveUpscaledFramesStreaming,
     "SplatKit_SphereSfMDatasetDualRes": SphereSfMDatasetDualRes,
+    "SplatKit_SphereSfMAddToDatasetDualRes": SphereSfMAddToDatasetDualRes,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
     "SplatKit_ResolveDatasetImages": "Resolve Dataset Images",
@@ -1759,4 +1967,5 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "SplatKit_SaveUpscaledDataset": "Save Upscaled Dataset",
     "SplatKit_SaveUpscaledFramesStreaming": "Save Upscaled Frames (Streaming)",
     "SplatKit_SphereSfMDatasetDualRes": "SphereSfM Dataset (Dual-Res: low-res SfM + 8K faces)",
+    "SplatKit_SphereSfMAddToDatasetDualRes": "SphereSfM Add Camera Path (Dual-Res)",
 }
