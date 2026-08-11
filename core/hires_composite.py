@@ -48,9 +48,12 @@ share depth and camera but differ in vertex colours. Keying without the colours 
 the coordinate pass an RGB-coloured mesh -- the "coordinate field" is then literally
 the photograph, and the output is swirled garbage with coverage ~0.02.
 """
+import contextlib
 import json
 import math
 import os
+import threading
+import time
 
 import numpy as np
 
@@ -82,6 +85,136 @@ DEFAULTS = dict(
     edge_hi=0.45,
     edge_energy=6.0,
 )
+
+
+# --------------------------------------------------------------------------- #
+# profiling                                                                   #
+# --------------------------------------------------------------------------- #
+class _Profile:
+    """Per-stage wall clock. Off unless ``SPLATKIT_PROFILE=1`` or ``profile=True``.
+
+    The composite is a chain of a dozen stages with wildly different costs -- a mesh
+    render burst, a tiled upscaler, several 8K GPU ops, a single-threaded zlib encode --
+    and from outside only the total is visible, so deciding what to optimise is
+    guesswork. This times every stage of every frame, prints one line per frame while
+    the run is happening, and a mean breakdown at the end.
+
+    CUDA is asynchronous, so a bare timer around a GPU call measures the launch and
+    charges the real work to whatever synchronises next. Every step boundary therefore
+    synchronises while profiling: it adds no work, but it does remove the CPU/GPU
+    overlap the pipeline normally gets, so read the result as ATTRIBUTION (which stage
+    owns the time) rather than as throughput.
+
+    Rendering happens on the prefetch thread, so those timings go to :meth:`bg` and are
+    reported per chunk and in the summary only -- charging them to whichever frame the
+    main thread happened to be on would be a lie either way.
+    """
+
+    def __init__(self, enabled=None, log=print):
+        if enabled is None:
+            enabled = str(os.environ.get("SPLATKIT_PROFILE", "0")).lower() \
+                not in ("0", "", "false", "no", "off")
+        self.on = bool(enabled)
+        self.log = log
+        self.cur, self.tot, self.bg_tot = {}, {}, {}
+        self.n = 0
+        self.t_start = time.perf_counter()
+        self._lock = threading.Lock()
+        self._sync = None
+
+    def _synchronize(self):
+        if self._sync is None:
+            import torch
+            self._sync = (torch.cuda.synchronize if torch.cuda.is_available()
+                          else (lambda: None))
+        self._sync()
+
+    @contextlib.contextmanager
+    def t(self, name):
+        """Time one stage of the current frame."""
+        if not self.on:
+            yield
+            return
+        self._synchronize()
+        t0 = time.perf_counter()
+        try:
+            yield
+        finally:
+            self._synchronize()
+            dt = time.perf_counter() - t0
+            self.cur[name] = self.cur.get(name, 0.0) + dt
+            self.tot[name] = self.tot.get(name, 0.0) + dt
+
+    @contextlib.contextmanager
+    def bg(self, name):
+        """Time work on a worker thread; reported per chunk and in the summary."""
+        if not self.on:
+            yield
+            return
+        self._synchronize()
+        t0 = time.perf_counter()
+        try:
+            yield
+        finally:
+            self._synchronize()
+            dt = time.perf_counter() - t0
+            with self._lock:
+                self.bg_tot[name] = self.bg_tot.get(name, 0.0) + dt
+
+    def setup(self, name, dt):
+        if self.on:
+            self.log(f"[profile] setup {name:<16} {dt:7.2f}s")
+            self.bg_tot["setup:" + name] = self.bg_tot.get("setup:" + name, 0.0) + dt
+
+    def add_writer(self, writer):
+        """Charge the PNG encoding that the writer threads did during this frame.
+
+        It overlaps the main thread by design, so it is reported alongside the frame
+        rather than inside its total -- but if it exceeds the total, the encode is the
+        thing setting the pace and ``write_queue`` will be where the frame blocks.
+        """
+        if not self.on:
+            return
+        now = float(getattr(writer, "encode_s", 0.0))
+        self._enc_last = now - getattr(self, "_enc_prev", 0.0)
+        self._enc_prev = now
+        self.bg_tot["png_encode"] = now
+
+    def frame(self, label):
+        """Flush one frame's stages as a line."""
+        if not self.on:
+            return
+        self.n += 1
+        tot = sum(self.cur.values())
+        parts = "  ".join(f"{k} {v:.2f}" for k, v in
+                          sorted(self.cur.items(), key=lambda kv: -kv[1]) if v >= 0.005)
+        enc = getattr(self, "_enc_last", 0.0)
+        self.log(f"[profile] {label} {tot:6.2f}s | {parts}"
+                 + (f"  || png_encode(bg) {enc:.2f}" if enc else ""))
+        self.cur = {}
+
+    def summary(self):
+        if not self.on or not self.n:
+            return
+        wall = time.perf_counter() - self.t_start
+        n = self.n
+        self.log(f"[profile] ---- {n} frames, {wall:.1f}s wall ({wall / n:.2f}s/frame) ----")
+        rows = ([(k, v, "main") for k, v in self.tot.items()]
+                + [(k, v, "bg") for k, v in self.bg_tot.items()])
+        for k, v, where in sorted(rows, key=lambda r: -r[1]):
+            self.log(f"[profile] {k:<20} {v:8.2f}s  {v / n:7.3f}s/frame  "
+                     f"{100 * v / max(wall, 1e-6):5.1f}%  [{where}]")
+
+
+def _timed_iter(prof, it):
+    """Iterate `it`, charging the time spent waiting for each item to `wait_render`."""
+    it = iter(it)
+    while True:
+        with prof.t("wait_render"):
+            item = next(it, None)
+        if item is None:
+            return
+        yield item
 
 
 # --------------------------------------------------------------------------- #
@@ -253,12 +386,72 @@ def _encode_uv(c, k):
                      0.5 + 0.5 * np.cos(2 * np.pi * k * c)], -1).astype(np.float32)
 
 
-def _decode_uv(img, k):
-    """Inverse of :func:`_encode_uv`, run on the rendered (interpolated) field."""
-    p = (np.arctan2((img[..., 1] - 0.5) * 2.0,
-                    (img[..., 2] - 0.5) * 2.0) / (2 * np.pi)) % 1.0
-    n = np.round(img[..., 0] * k - p)
-    return ((n + p) / k).astype(np.float32)
+# --------------------------------------------------------------------------- #
+# per-frame field maths, on the device                                         #
+# --------------------------------------------------------------------------- #
+# Everything below is the torch twin of a numpy/cv2 step that used to run on the
+# host. At geometry_scale 2 the fields are 4096x2048, and a chain of arctan2 /
+# Gaussian / gradient / erode over them measured ~2.0 s per frame on the CPU against
+# ~0.2 s for the entire 8192x4096 GPU half of the same frame -- i.e. the composite
+# was CPU-bound on work that has no reason to be on the CPU at all.
+#
+# These reproduce cv2 rather than approximate it: cv2 derives a Gaussian's width from
+# its sigma (see _gauss1d) and pads with reflect-101, and cv2.erode treats the border
+# as +inf so it cannot pull the minimum down. Matching all three is what makes the
+# switch a pure speed change -- verified frame-for-frame against the CPU path.
+def _blur_sigma_t(torch, cv2, x, sigma):
+    """cv2.GaussianBlur(x, (0, 0), sigma) for a [H, W] float tensor."""
+    kern, k = _gauss1d(torch, cv2, float(sigma), x.device)
+    return _blur_t(torch, kern, k, x[None, None])[0, 0]
+
+
+def _decode_uv_t(torch, img, k):
+    """Inverse of :func:`_encode_uv`, on the rendered (interpolated) [H, W, 3] field.
+
+    The fine phase carries the low bits, so the coarse channel is only used to pick
+    which cycle of it we are in -- which is what recovers ~12 bits from an 8-bit
+    vertex colour.
+    """
+    p = (torch.atan2((img[..., 1] - 0.5) * 2.0,
+                     (img[..., 2] - 0.5) * 2.0) / (2 * math.pi)) % 1.0
+    n = torch.round(img[..., 0] * k - p)
+    return (n + p) / k
+
+
+def _smooth_uv_t(torch, cv2, u, v, sigma):
+    """Low-pass the decoded field. ``u`` wraps, so it is smoothed on the unit circle."""
+    ang = 2 * math.pi * u
+    re = _blur_sigma_t(torch, cv2, torch.cos(ang), sigma)
+    im = _blur_sigma_t(torch, cv2, torch.sin(ang), sigma)
+    return (torch.atan2(im, re) / (2 * math.pi)) % 1.0, _blur_sigma_t(torch, cv2, v, sigma)
+
+
+def _erode_t(torch, x, k):
+    """cv2.erode with a k x k rect kernel, on a [H, W] float tensor in 0..1.
+
+    cv2 anchors an even kernel at ``k // 2``, so the window is asymmetric, and its
+    border value for erosion is +inf -- padding with 1.0 reproduces that.
+    """
+    import torch.nn.functional as F
+
+    a = k // 2
+    p = F.pad(x[None, None], (a, k - 1 - a, a, k - 1 - a), value=1.0)
+    return -F.max_pool2d(-p, k, stride=1)[0, 0]
+
+
+def _despeckle(torch, cv2, g_t, min_area):
+    """Drop connected components below ``min_area`` from a binary [H, W] tensor.
+
+    The one step with no device equivalent, so the mask makes a round trip -- 8 MB
+    each way, against a labelling that costs ~20 ms. The per-label ``g[lbl == i] = 0``
+    loop this replaces was a full pass over the 8 M-pixel image PER COMPONENT; a
+    lookup indexed by the label image is the same result in one pass.
+    """
+    g = g_t.to(torch.uint8).cpu().numpy()
+    _, lbl, cc, _ = cv2.connectedComponentsWithStats(g, 8)
+    keep = cc[:, cv2.CC_STAT_AREA] >= min_area
+    keep[0] = False                              # label 0 is the background
+    return torch.from_numpy(keep[lbl]).to(g_t.device).float()
 
 
 _DEBUG_README = """\
@@ -307,7 +500,8 @@ def run_composite(src_hi, pano_geo, rail, out_dir, wan=None, out_w=8192,
                   base_mode="geometry", frames_spec="all", depth=None,
                   upscale=None, proxy_width=2048, name_prefix="", device="cuda",
                   moge_kwargs=None, params=None, log=print, progress=None,
-                  depth_grid="geometry_res", prefetch=True, debug_save="off"):
+                  depth_grid="geometry_res", prefetch=True, debug_save="off",
+                  profile=None):
     """Composite one trajectory. Writes hi-res PNGs; returns proxies + a report.
 
     src_hi     : [H, W, 3] uint8 -- the ORIGINAL high-resolution panorama (8K).
@@ -337,6 +531,7 @@ def run_composite(src_hi, pano_geo, rail, out_dir, wan=None, out_w=8192,
         import matrix3d_pipeline as mp
 
     Image.MAX_IMAGE_PIXELS = None
+    prof = _Profile(profile, log)
     P = dict(DEFAULTS)
     P.update(params or {})
     gs = max(1, int(P["geom_scale"]))
@@ -351,6 +546,7 @@ def run_composite(src_hi, pano_geo, rail, out_dir, wan=None, out_w=8192,
     H, W = pano_geo.shape[:2]
 
     # --- depth ---------------------------------------------------------------
+    t_setup = time.perf_counter()
     if depth is None:
         mk = dict(resolution_level=6, merge_long=1440, merge_short=720)
         mk.update(moge_kwargs or {})
@@ -374,9 +570,12 @@ def run_composite(src_hi, pano_geo, rail, out_dir, wan=None, out_w=8192,
     elif depth.shape != (H, W):
         depth = cv2.resize(depth.astype(np.float32), (W, H), interpolation=cv2.INTER_LINEAR)
     depth_t = torch.from_numpy(np.ascontiguousarray(depth)).float().to(device)
+    prof.setup("depth", time.perf_counter() - t_setup)
 
+    t_setup = time.perf_counter()
     mp.setup_paths(None)
     nvrender = mp._load_nvrender(None)
+    prof.setup("nvrender_load", time.perf_counter() - t_setup)
 
     T = len(rail) if wan is None else min(len(rail), len(wan))
     if T < 1:
@@ -393,18 +592,22 @@ def run_composite(src_hi, pano_geo, rail, out_dir, wan=None, out_w=8192,
     sel_set = set(sel)
 
     # --- coordinate field ----------------------------------------------------
+    t_setup = time.perf_counter()
     ys, xs = np.meshgrid(np.arange(H, dtype=np.float32),
                          np.arange(W, dtype=np.float32), indexing="ij")
     u_enc = _encode_uv((xs / (W - 1)).astype(np.float32), k_uv)
     v_enc = _encode_uv((ys / (H - 1)).astype(np.float32), k_uv)
+    prof.setup("uv_encode", time.perf_counter() - t_setup)
 
     # --- source mip pyramid --------------------------------------------------
     # Sampling an 8K texture through a minifying warp without mip-mapping aliases
     # badly (herringbone moire on grazing surfaces).
+    t_setup = time.perf_counter()
     src_t = torch.from_numpy(src_hi.astype(np.float32) / 255.0).permute(2, 0, 1)[None].to(device)
     pyr = [src_t]
     while min(pyr[-1].shape[-2:]) > 64 and len(pyr) < int(P["mip_levels"]):
         pyr.append(torch.nn.functional.avg_pool2d(pyr[-1], 2))
+    prof.setup("mip_pyramid", time.perf_counter() - t_setup)
 
     src_h, src_w = src_hi.shape[:2]
     log(f"[HiResComposite] source {src_w}x{src_h} -> output {out_w}x{out_h} | geometry "
@@ -495,9 +698,17 @@ def run_composite(src_hi, pano_geo, rail, out_dir, wan=None, out_w=8192,
 
     def render_all(idxs):
         """The three passes one chunk needs: colour, then the u and v coordinate fields."""
-        rgb_c, m_c = render_chunk(pano_geo.astype(np.float32) / 255.0, idxs)
-        u_c, _ = render_chunk(u_enc, idxs)
-        v_c, _ = render_chunk(v_enc, idxs)
+        t_c = time.perf_counter()
+        with prof.bg("render_rgb"):
+            rgb_c, m_c = render_chunk(pano_geo.astype(np.float32) / 255.0, idxs)
+        with prof.bg("render_u"):
+            u_c, _ = render_chunk(u_enc, idxs)
+        with prof.bg("render_v"):
+            v_c, _ = render_chunk(v_enc, idxs)
+        if prof.on:
+            dt = time.perf_counter() - t_c
+            log(f"[profile] render chunk of {len(idxs)} frames (3 passes): {dt:.2f}s "
+                f"= {dt / max(len(idxs), 1):.2f}s/frame")
         return rgb_c, m_c, u_c, v_c
 
     # The gate decides, per pixel, photo or WAN. Three ways to shape it:
@@ -527,34 +738,36 @@ def run_composite(src_hi, pano_geo, rail, out_dir, wan=None, out_w=8192,
         # chunk of passes at geometry resolution is several GB, and this keeps two).
         source = (_ChunkPrefetch(render_all, chunks) if prefetch and len(chunks) > 1
                   else ((c, render_all(c)) for c in chunks))
-        for idxs, (rgb_c, m_c, u_c, v_c) in source:
+        for idxs, (rgb_c, m_c, u_c, v_c) in _timed_iter(prof, source):
             for k, fi in enumerate(idxs):
                 fname = f"{name_prefix}{fi:04d}.png"
-                u = _decode_uv(u_c[k], k_uv)
-                v = _decode_uv(v_c[k], k_uv)
+                with prof.t("uv_decode"):
+                    u = _decode_uv_t(torch, torch.from_numpy(
+                        np.ascontiguousarray(u_c[k])).to(device), k_uv)
+                    v = _decode_uv_t(torch, torch.from_numpy(
+                        np.ascontiguousarray(v_c[k])).to(device), k_uv)
 
                 # The mesh interpolates coordinates linearly PER TRIANGLE, so the field
                 # is C0 but not C1; magnifying it to output resolution makes the facet
                 # edges visible as a diamond lattice. A light low-pass removes that --
                 # the true field is smooth, and real discontinuities are gated out
                 # below. u wraps, so smooth it on the unit circle.
-                sig = float(P["uv_smooth"]) * gs
-                uc = np.exp(2j * np.pi * u.astype(np.float32))
-                uc = (cv2.GaussianBlur(uc.real, (0, 0), sig)
-                      + 1j * cv2.GaussianBlur(uc.imag, (0, 0), sig))
-                u = (np.angle(uc) / (2 * np.pi)) % 1.0
-                v = cv2.GaussianBlur(v.astype(np.float32), (0, 0), sig)
+                with prof.t("uv_smooth"):
+                    sig = float(P["uv_smooth"]) * gs
+                    u, v = _smooth_uv_t(torch, cv2, u, v, sig)
 
                 # --- the base WAN frame, at output resolution -----------------
                 if wan is not None:
                     base = wan[fi]
                     raw_w = base.shape[1]
-                    if upscale is not None and base.shape[1] < out_w:
-                        base = upscale(base)
-                    wan_up = (base if base.shape[1] == out_w else cv2.resize(
-                        base, (out_w, out_h),
-                        interpolation=cv2.INTER_AREA if base.shape[1] > out_w
-                        else cv2.INTER_CUBIC))
+                    with prof.t("wan_upscale"):
+                        if upscale is not None and base.shape[1] < out_w:
+                            base = upscale(base)
+                    with prof.t("wan_resize"):
+                        wan_up = (base if base.shape[1] == out_w else cv2.resize(
+                            base, (out_w, out_h),
+                            interpolation=cv2.INTER_AREA if base.shape[1] > out_w
+                            else cv2.INTER_CUBIC))
                     if not manifest:
                         # The single most common cause of a soft hole fill is the
                         # upscaler not being wired, which is otherwise invisible: the
@@ -581,51 +794,60 @@ def run_composite(src_hi, pano_geo, rail, out_dir, wan=None, out_w=8192,
                     # Do NOT warp onto WAN. The flow warp exists to make the source
                     # agree with WAN's drifted frame; here WAN is not the reference, so
                     # warping would inject WAN's drift into an otherwise exact field.
-                    uvw = np.stack([u, v], -1)
-                    m_w = m_c[k].astype(np.float32)
+                    uvw = torch.stack([u, v], -1)
+                    m_w = torch.from_numpy(
+                        np.ascontiguousarray(m_c[k])).to(device).float()
                     keep = fb_soft = None
                 else:
+                    # The WAN branch is still a host pipeline (RAFT aside), so hand it
+                    # the fields as numpy and take numpy back.
                     uvw, m_w, keep, fb_soft = _wan_align(
-                        torch, cv2, raft, wan[fi], rgb_c[k], m_c[k], u, v, H, W, fh, fw,
+                        torch, cv2, raft, wan[fi], rgb_c[k], m_c[k],
+                        u.cpu().numpy(), v.cpu().numpy(), H, W, fh, fw,
                         device, gs, float(P["veto_zncc"]))
+                    uvw = torch.from_numpy(np.ascontiguousarray(uvw)).to(device).float()
+                    m_w = torch.from_numpy(np.ascontiguousarray(m_w)).to(device).float()
+                    keep = torch.from_numpy(np.ascontiguousarray(keep)).to(device).float()
+                    fb_soft = torch.from_numpy(
+                        np.ascontiguousarray(fb_soft)).to(device).float()
 
                 # Minification limit: where one output pixel covers many source pixels
                 # the source can no longer beat WAN. Measure the WARP SCALE, not pixel
                 # noise -- a per-pixel finite difference on a one-triangle-per-pixel
                 # field reports jitter (median rho read 9.9 vs 2.8 for the same warp at
                 # half the mesh density), so differentiate the smoothed copy.
-                uu = uvw[..., 0] * src_w
-                vv = uvw[..., 1] * src_h
-                gu = np.abs(np.gradient(uu, axis=1))
-                gu[gu > src_w / 2] = 0.0                      # ignore the 0/1 wrap
-                rho2k = np.maximum(gu, np.abs(np.gradient(vv, axis=0))) * (W / out_w)
-                rho_soft = np.clip((float(P["rho_hi"]) - rho2k)
-                                   / max(float(P["rho_hi"]) - float(P["rho_lo"]), 1e-6), 0, 1)
+                with prof.t("rho"):
+                    uu = uvw[..., 0] * src_w
+                    vv = uvw[..., 1] * src_h
+                    gu = torch.gradient(uu, dim=1)[0].abs()
+                    gu = torch.where(gu > src_w / 2, torch.zeros_like(gu), gu)
+                    rho2k = torch.maximum(
+                        gu, torch.gradient(vv, dim=0)[0].abs()) * (W / out_w)
+                    rho_soft = ((float(P["rho_hi"]) - rho2k)
+                                / max(float(P["rho_hi"]) - float(P["rho_lo"]), 1e-6)
+                                ).clamp(0, 1)
 
                 # Combine as a CONTINUOUS confidence and smooth it BEFORE deciding:
                 # isolated bad pixels get absorbed, coherent bad regions stay out.
                 # (Morphological closing cannot make that distinction and happily
                 # resurrects whole unreliable patches.)
-                if base_mode == "geometry":
-                    conf = (np.clip(m_w, 0, 1) * rho_soft).astype(np.float32)
-                else:
-                    conf = (np.clip(m_w, 0, 1) * keep * fb_soft * rho_soft).astype(np.float32)
-                conf = cv2.GaussianBlur(conf, (0, 0), 6.0 * gs)
-                g = (conf > 0.55).astype(np.uint8)
-                # The rejections are speckled: close small specks first so feathering
-                # does not dissolve otherwise-good regions, then pull back from the real
-                # boundaries (silhouettes) where the warp is least reliable.
-                n_lbl, lbl, cc, _ = cv2.connectedComponentsWithStats(g, 8)
-                for i in range(1, n_lbl):
-                    if cc[i, cv2.CC_STAT_AREA] < 400 * gs * gs:
-                        g[lbl == i] = 0
-                e = 7 * gs
-                g = cv2.erode(g, np.ones((e, e), np.uint8))
-                gf = cv2.GaussianBlur(g.astype(np.float32), (0, 0), 3.0 * gs)
-                ema = float(P["gate_ema"])
-                gate_prev = gf if gate_prev is None else ema * gf + (1 - ema) * gate_prev
-                gf = gate_prev
-                cover.append(float((gf > 0.5).mean()))
+                with prof.t("gate_build"):
+                    if base_mode == "geometry":
+                        conf = m_w.clamp(0, 1) * rho_soft
+                    else:
+                        conf = m_w.clamp(0, 1) * keep * fb_soft * rho_soft
+                    conf = _blur_sigma_t(torch, cv2, conf, 6.0 * gs)
+                    g = (conf > 0.55).float()
+                    # The rejections are speckled: close small specks first so feathering
+                    # does not dissolve otherwise-good regions, then pull back from the
+                    # real boundaries (silhouettes) where the warp is least reliable.
+                    g = _despeckle(torch, cv2, g, 400 * gs * gs)
+                    g = _erode_t(torch, g, 7 * gs)
+                    gf = _blur_sigma_t(torch, cv2, g, 3.0 * gs)
+                    ema = float(P["gate_ema"])
+                    gate_prev = gf if gate_prev is None else ema * gf + (1 - ema) * gate_prev
+                    gf = gate_prev
+                    cover.append(float((gf > 0.5).float().mean()))
 
                 # --- sample the source, blend, and come back as ONE uint8 frame ---
                 # Geometry mode never leaves the GPU: `fused` is just `hi`, so the whole
@@ -635,25 +857,30 @@ def run_composite(src_hi, pano_geo, rail, out_dir, wan=None, out_w=8192,
                 # float32 frame is 400 MB and the old path built several of them.
                 if base_mode == "geometry":
                     with torch.no_grad():
-                        hi_t = _sample_source(torch, pyr, uvw, out_h, out_w, src_w, src_h,
-                                              device, as_tensor=True)
-                        gate_t = torch.nn.functional.interpolate(
-                            torch.from_numpy(gf).to(device)[None, None],
-                            size=(out_h, out_w), mode="bilinear", align_corners=False)
-                        # Cut AFTER the upsample: thresholding the geometry-res gate and
-                        # then interpolating would put the fractions straight back in.
-                        if hard_gate:
-                            gate_t = (gate_t > 0.5).to(gate_t.dtype)
-                            if edge_sig > 0:
-                                # Only the boundary softens: a few output pixels either
-                                # side. Everything further in stays exactly 0 or 1, so no
-                                # area can be a part-mix.
-                                ek, ekn = _gauss1d(torch, cv2, edge_sig, gate_t.device)
-                                gate_t = _blur_t(torch, ek, ekn, gate_t)
-                        fill_t = None if wan_up is None else torch.from_numpy(
-                            np.ascontiguousarray(wan_up)).to(device).permute(2, 0, 1)[None].float()
-                        fill_t = _tone_fill_gpu(torch, cv2, hi_t, fill_t, gate_t,
-                                                out_w, out_h, P)
+                        with prof.t("sample_source"):
+                            hi_t = _sample_source(torch, pyr, uvw, out_h, out_w, src_w,
+                                                  src_h, device, as_tensor=True)
+                        with prof.t("gate_upsample"):
+                            gate_t = torch.nn.functional.interpolate(
+                                gf[None, None], size=(out_h, out_w),
+                                mode="bilinear", align_corners=False)
+                            # Cut AFTER the upsample: thresholding the geometry-res gate
+                            # and then interpolating puts the fractions straight back in.
+                            if hard_gate:
+                                gate_t = (gate_t > 0.5).to(gate_t.dtype)
+                                if edge_sig > 0:
+                                    # Only the boundary softens: a few output pixels
+                                    # either side. Everything further in stays exactly 0
+                                    # or 1, so no area can be a part-mix.
+                                    ek, ekn = _gauss1d(torch, cv2, edge_sig, gate_t.device)
+                                    gate_t = _blur_t(torch, ek, ekn, gate_t)
+                        with prof.t("wan_to_gpu"):
+                            fill_t = None if wan_up is None else torch.from_numpy(
+                                np.ascontiguousarray(wan_up)).to(device) \
+                                .permute(2, 0, 1)[None].float()
+                        with prof.t("tone_fill"):
+                            fill_t = _tone_fill_gpu(torch, cv2, hi_t, fill_t, gate_t,
+                                                    out_w, out_h, P)
                         if "source" in dbg_dirs:
                             writer.save(os.path.join(dbg_dirs["source"], fname),
                                         hi_t.clamp(0, 255).to(torch.uint8)[0]
@@ -666,17 +893,31 @@ def run_composite(src_hi, pano_geo, rail, out_dir, wan=None, out_w=8192,
                             writer.save(os.path.join(dbg_dirs["wan_fill"], fname),
                                         fill_t.clamp(0, 255).to(torch.uint8)[0]
                                         .permute(1, 2, 0).cpu().numpy())
-                        comp_t = (gate_t * hi_t + (1 - gate_t) * fill_t).clamp(0, 255)
-                        comp = comp_t.to(torch.uint8)[0].permute(1, 2, 0).cpu().numpy()
-                        gate_small = torch.nn.functional.interpolate(
-                            (gate_t.clamp(0, 1) * 255), size=(ph, pw), mode="area"
-                        ).to(torch.uint8)[0, 0].cpu().numpy()
-                        del hi_t, gate_t, fill_t, comp_t
-                    torch.cuda.empty_cache()
+                        with prof.t("blend"):
+                            comp_t = (gate_t * hi_t + (1 - gate_t) * fill_t).clamp(0, 255)
+                            comp_u8 = comp_t.to(torch.uint8)
+                        with prof.t("proxy_resize"):
+                            # Box-average the QUANTISED frame, so this is the same
+                            # arithmetic cv2's INTER_AREA does on the uint8 image --
+                            # averaging before quantisation would shift the proxy by up
+                            # to a level. Doing it here also saves a second host pass
+                            # over 100 MB.
+                            prox_t = torch.nn.functional.interpolate(
+                                comp_u8.float(), size=(ph, pw), mode="area")
+                        with prof.t("download"):
+                            comp = comp_u8[0].permute(1, 2, 0).cpu().numpy()
+                            prox = prox_t.round().clamp(0, 255).to(torch.uint8)[0] \
+                                .permute(1, 2, 0).cpu().numpy()
+                            gate_small = torch.nn.functional.interpolate(
+                                (gate_t.clamp(0, 1) * 255), size=(ph, pw), mode="area"
+                            ).to(torch.uint8)[0, 0].cpu().numpy()
+                        del hi_t, gate_t, fill_t, comp_t, comp_u8, prox_t
+                    with prof.t("empty_cache"):
+                        torch.cuda.empty_cache()
                 else:
                     hi = _sample_source(torch, pyr, uvw, out_h, out_w, src_w, src_h, device)
                     fused = _wan_fuse(cv2, np, hi, wan_up, P)
-                    gate = cv2.resize(gf, (out_w, out_h),
+                    gate = cv2.resize(gf.cpu().numpy(), (out_w, out_h),
                                       interpolation=cv2.INTER_LINEAR)[..., None]
                     if hard_gate:
                         gate = (gate > 0.5).astype(np.float32)
@@ -694,26 +935,33 @@ def run_composite(src_hi, pano_geo, rail, out_dir, wan=None, out_w=8192,
                     gate_small = cv2.resize(
                         (np.clip(gate[..., 0], 0, 1) * 255).astype(np.uint8), (pw, ph),
                         interpolation=cv2.INTER_AREA)
+                    with prof.t("proxy_resize"):
+                        prox = cv2.resize(comp, (pw, ph), interpolation=cv2.INTER_AREA)
                     del hi, fused, gate
 
                 # --- outputs ---------------------------------------------------
                 # Encoding is handed to a writer thread: PNG is single-threaded zlib and
                 # was a third of the per-frame budget with the GPU idle throughout.
-                writer.save(os.path.join(frames_dir, fname), comp)
+                with prof.t("write_queue"):
+                    writer.save(os.path.join(frames_dir, fname), comp)
                 manifest.append({"frame": int(fi), "file": f"frames/{fname}",
                                  "coverage": round(float(cover[-1]), 4),
                                  "w2c": np.asarray(rail[fi]).tolist()})
-                prox = cv2.resize(comp, (pw, ph), interpolation=cv2.INTER_AREA)
-                writer.save(os.path.join(proxy_dir, fname), prox)
+                with prof.t("write_queue"):
+                    writer.save(os.path.join(proxy_dir, fname), prox)
                 proxies.append(prox)
                 gates.append(gate_small)
                 del comp
+                prof.add_writer(writer)
+                prof.frame(f"frame {fi:4d} ({len(manifest)}/{len(sel)})")
                 if progress is not None:
                     progress(len(manifest), len(sel))
                 if len(manifest) % 5 == 1 or len(manifest) == len(sel):
                     log(f"[HiResComposite] frame {fi}/{T} "
                         f"({len(manifest)}/{len(sel)}) coverage={cover[-1]:.2f}")
 
+    prof.add_writer(writer)                      # the tail flushed during __exit__
+    prof.summary()
     cov_mean = float(np.mean(cover))
     if cov_mean < 0.02:
         log(f"[HiResComposite] coverage is {cov_mean:.3f} -- essentially NOTHING came from "
@@ -840,18 +1088,30 @@ def _tone_fill_gpu(torch, cv2, hi_t, fill_t, gate_t, out_w, out_h, P):
 class _AsyncWriter:
     """Encode and write frames on background threads.
 
-    PNG is zlib, so encoding an 8192x4096 frame costs ~2.8 s on one core and cannot be
-    parallelised internally -- measured at a third of the whole per-frame budget, with the
-    GPU idle throughout. Handing the finished array to a worker lets that overlap the next
-    frame. The queue is short on purpose: each pending frame is ~100 MB.
+    PNG is zlib, so encoding an 8192x4096 frame cannot be parallelised internally, and
+    once the field maths moved to the GPU it became the largest single cost in the loop.
+    Handing the finished array to a worker lets it overlap the next frame; the queue is
+    short on purpose, because each pending frame is ~100 MB.
+
+    Two settings, both measured on a real 8K composite frame:
+
+      * ``compress_level=2`` rather than Pillow's default 6 -- 2.3 s against 3.7 s for a
+        file 3% larger (58.1 vs 56.5 MB). Level 1 is faster again (1.3 s) but 41% larger,
+        which is the wrong trade for a set of a few hundred frames.
+      * three workers rather than two, so ~0.8 s of encode capacity per frame. Below that
+        the writer stops setting the pace no matter what else is optimised, which two
+        workers at level 6 (1.8 s/frame) did not manage.
     """
 
-    def __init__(self, workers=2, depth=3):
+    def __init__(self, workers=3, depth=3, compress_level=2):
         import queue
         import threading
 
         self.q = queue.Queue(maxsize=depth)
         self.err = None
+        self.encode_s = 0.0                      # summed encode wall clock, for _Profile
+        self.compress_level = int(compress_level)
+        self._lock = threading.Lock()
         self._stop = object()
         self.threads = [threading.Thread(target=self._run, daemon=True)
                         for _ in range(max(1, workers))]
@@ -867,7 +1127,10 @@ class _AsyncWriter:
                 if item is self._stop:
                     return
                 path, arr = item
-                Image.fromarray(arr).save(path)
+                t0 = time.perf_counter()
+                Image.fromarray(arr).save(path, compress_level=self.compress_level)
+                with self._lock:
+                    self.encode_s += time.perf_counter() - t0
             except Exception as e:                       # surfaced by close()
                 self.err = self.err or e
             finally:
@@ -943,6 +1206,7 @@ def _sample_source(torch, pyr, uvw, out_h, out_w, src_w, src_h, device,
                    as_tensor=False):
     """Sample the source mip pyramid through the coordinate field.
 
+    ``uvw`` is [H, W, 2], either a host array or a tensor already on the device.
     Returns [1, 3, out_h, out_w] on the device when ``as_tensor``, else
     [out_h, out_w, 3] on the host. Both are 0..255.
 
@@ -950,7 +1214,8 @@ def _sample_source(torch, pyr, uvw, out_h, out_w, src_w, src_h, device,
     output pixel cover? Trilinear between the two nearest mips.
     """
     with torch.no_grad():
-        uvt = torch.from_numpy(uvw.transpose(2, 0, 1))[None].to(device)
+        uvt = (uvw.permute(2, 0, 1)[None].to(device) if torch.is_tensor(uvw)
+               else torch.from_numpy(uvw.transpose(2, 0, 1))[None].to(device))
         uvt = torch.nn.functional.interpolate(uvt, size=(out_h, out_w),
                                               mode="bilinear", align_corners=True)
         grid = torch.stack([uvt[0, 0] * 2 - 1, uvt[0, 1] * 2 - 1], -1)[None]
