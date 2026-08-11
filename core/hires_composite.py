@@ -697,17 +697,25 @@ def run_composite(src_hi, pano_geo, rail, out_dir, wan=None, out_w=8192,
         return out
 
     def render_all(idxs):
-        """The three passes one chunk needs: colour, then the u and v coordinate fields."""
+        """The passes one chunk needs: the u and v coordinate fields, and colour for WAN.
+
+        Geometry mode never reads the colour render -- only its validity mask, and that
+        is a property of the mesh and the camera, not of the vertex colours, so the u
+        pass returns the same one. Rendering colour anyway was a third of the render
+        thrown away on the default path.
+        """
         t_c = time.perf_counter()
-        with prof.bg("render_rgb"):
-            rgb_c, m_c = render_chunk(pano_geo.astype(np.float32) / 255.0, idxs)
         with prof.bg("render_u"):
-            u_c, _ = render_chunk(u_enc, idxs)
+            u_c, m_c = render_chunk(u_enc, idxs)
         with prof.bg("render_v"):
             v_c, _ = render_chunk(v_enc, idxs)
+        rgb_c = None
+        if base_mode != "geometry":
+            with prof.bg("render_rgb"):
+                rgb_c, m_c = render_chunk(pano_geo.astype(np.float32) / 255.0, idxs)
         if prof.on:
-            dt = time.perf_counter() - t_c
-            log(f"[profile] render chunk of {len(idxs)} frames (3 passes): {dt:.2f}s "
+            dt, n = time.perf_counter() - t_c, 2 if base_mode == "geometry" else 3
+            log(f"[profile] render chunk of {len(idxs)} frames ({n} passes): {dt:.2f}s "
                 f"= {dt / max(len(idxs), 1):.2f}s/frame")
         return rgb_c, m_c, u_c, v_c
 

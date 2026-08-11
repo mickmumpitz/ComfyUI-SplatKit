@@ -47,23 +47,43 @@ def _upscaler(upscale_model):
     Tiled so an 8K target does not need an 8K activation. The upscaler only matters
     inside the holes in geometry mode (the source supplies everything else), but in
     wan mode it supplies the detail everywhere the source is distrusted too.
+
+    Run under fp16 autocast: measured 1.49 s -> 0.95 s per frame for 4x-UltraSharp on a
+    1440x720 WAN frame, the largest remaining cost in the composite. The output differs
+    from fp32 by at most 7/255 on isolated pixels (mean 0.09), and only inside the holes
+    -- generated content that is then tone-matched anyway. Autocast rather than a halved
+    model because the UPSCALE_MODEL object is shared with any other node wired to the
+    same loader, and this leaves its weights untouched (verified: still float32 after).
+    Channels_last was tried and is SLOWER here, both for the cast and for fp32 after.
+
+    Set ``SPLATKIT_UPSCALE_FP32=1`` to force full precision. A model that produces
+    non-finite values under fp16 falls back to fp32 on its own, permanently.
     """
     if upscale_model is None:
         return None
     dev = comfy.model_management.get_torch_device()
+    state = {"fp16": os.environ.get("SPLATKIT_UPSCALE_FP32", "0").lower()
+             in ("0", "", "false", "no", "off")}
+
+    def run(m, t, half):
+        with torch.no_grad(), torch.autocast("cuda", torch.float16, enabled=half):
+            return comfy.utils.tiled_scale(t, lambda a: m(a), tile_x=512, tile_y=512,
+                                           overlap=32, upscale_amount=m.scale)
 
     def up(img_u8):
         m = upscale_model.to(dev)
         t = torch.from_numpy(img_u8.astype(np.float32) / 255.0).permute(2, 0, 1)[None].to(dev)
-        with torch.no_grad():
-            out = comfy.utils.tiled_scale(t, lambda a: m(a), tile_x=512, tile_y=512,
-                                          overlap=32, upscale_amount=m.scale)
-        o = (out[0].permute(1, 2, 0).clamp(0, 1).cpu().numpy() * 255).astype(np.uint8)
+        out = run(m, t, state["fp16"])
+        if state["fp16"] and not torch.isfinite(out).all():
+            print("[HiResComposite] the upscale model produced non-finite values in "
+                  "fp16 -- falling back to full precision for the rest of this run.")
+            state["fp16"] = False
+            del out
+            out = run(m, t, False)
+        # Quantise on the device: doing the *255 and the cast on the host was a pass
+        # over 50 M float32 values for a buffer that is about to be 8 bit anyway.
+        o = (out[0].permute(1, 2, 0).clamp(0, 1) * 255).to(torch.uint8).cpu().numpy()
         del t, out
-        # torch's own cache release, not model_management.soft_empty_cache: other packs
-        # monkeypatch that one and some of their versions need a live PromptServer.
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
         return o
 
     return up
