@@ -1,7 +1,7 @@
 # Vendored third-party code
 
 This folder bundles the minimal subset of [Matrix-3D](https://github.com/SkyworkAI/Matrix-3D)
-and [MoGe](https://github.com/microsoft/MoGe) that the Pano2Splat-Matrix node pack
+and [MoGe](https://github.com/microsoft/MoGe) that the ComfyUI-SplatKit node pack
 needs, so the pack runs standalone — no external Matrix-3D source tree required.
 
 Everything here is copied **verbatim**; none of the upstream logic is edited. The

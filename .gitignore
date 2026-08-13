@@ -11,3 +11,5 @@ wheels/
 _input/
 # ComfyUI /object_info dump -- captured locally, leaks the author's folder contents. Never commit.
 objinfo.json
+# Local AI-assistant session config.
+.claude/

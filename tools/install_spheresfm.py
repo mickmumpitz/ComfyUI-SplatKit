@@ -8,7 +8,7 @@ the bundle from the GitHub Release into bin/ the first time it runs. Use this sc
                                     (for offline machines — copy the zip over first)
 
 The bundle is a BSD-3-Clause CUDA build of github.com/json87/SphereSfM (sm_75..120 + PTX).
-See docs/panosplat-workflow/SPHERESFM.md and bin/BUILD_INFO.txt for details.
+See docs/SPHERESFM.md and bin/BUILD_INFO.txt for details.
 """
 import argparse
 import os

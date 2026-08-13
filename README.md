@@ -40,13 +40,20 @@ git clone https://github.com/mickmumpitz/ComfyUI-SplatKit
 python_embeded\python.exe -m pip install -r ComfyUI-SplatKit/requirements.txt
 ```
 
-Then restart ComfyUI. Two things download themselves on first use:
+(On a non-portable install — venv, Linux — the last line is just
+`python -m pip install -r ComfyUI-SplatKit/requirements.txt`.)
+
+Then restart ComfyUI. Three things download themselves on first use:
 
 - the **MoGe** checkpoint → `ComfyUI/models/MoGe`
 - the **SphereSfM** binary (`colmap_sphere.exe`, ~37 MB, SHA-256 verified) → `bin/`.
   It's a BSD-3-Clause CUDA build of [SphereSfM](https://github.com/json87/SphereSfM) with
   CUDA static-linked, so there is no CUDA toolkit to install. See
   [docs/SPHERESFM.md](docs/SPHERESFM.md) for offline install and GPU support.
+  **Note: this binary is Windows + NVIDIA (Turing or newer) only** — on Linux/macOS the
+  SphereSfM dataset nodes won't run; the rest of the pack is platform-independent.
+- the **RAFT optical-flow weights** (torchvision model zoo) the first time HiRes Composite
+  runs with `base_mode=wan`.
 
 **You supply:** a WAN 2.1 i2v checkpoint, and the Matrix-3D pano LoRA converted to ComfyUI's
 key convention with `tools/convert_pano_lora.py` (→ `pano_video_gen_720p_comfy.safetensors`
@@ -59,19 +66,8 @@ panorama yet.
 
 | | | Also needs |
 |---|---|---|
-| `0_generate_360_panorama-upscale.json` | Make the input pano itself. Two modes on one switch: **text→pano** (Krea 2 Turbo generates a 2:1 equirect directly) and **image→pano** (Qwen-Image-Edit + a 360 LoRA turns any photo into a full ERP). Both finish with a detail-refine pass, a roll-180°-inpaint seam fix so the wrap edge is invisible, and an upscale tail. | `comfyui-LatLong`, `ComfyUI-KJNodes`, `ComfyUI_essentials`, `ComfyUI_UltimateSDUpscale`, `ComfyUI-SeedVR2_VideoUpscaler`, `ComfyUI-Easy-Use` |
-| `1_camera_plot_flythrough.json` | The main graph. Draw a camera path on the pano, WAN fills it in, SphereSfM writes the dataset. | — |
-| `1b_camera_plot_add_to_dataset.json` | Grow an existing dataset with one more trajectory instead of rebuilding it. | — |
-| `1c_generate-dataset-hires.json` | Workflow 1 with a **HiRes Composite** on every branch, already wired to that branch's camera rail and WAN frames. One queue: pano → WAN → composite frames. Finish with `4b`. | — |
-| `2a_upscale_colmap_camera_sorted.json` | Upscale a finished dataset in place, in camera-major order. | `ComfyUI-SeedVR2_VideoUpscaler` |
-| `2b1_upscale_panorama_frames.json` | *Best quality, step 1 of 2.* Upscale the saved equirect panoramas frame-by-frame to 8K and stream them to disk. | `ComfyUI-VideoHelperSuite`, `ComfyUI_UltimateSDUpscale`, `ComfyUI_essentials` |
-| `2b2_sfm_from_upscaled.json` | *Step 2.* Run SphereSfM on the upscaled panoramas from `2b1`. | `ComfyUI-VideoHelperSuite` |
-| `2b2_sfm_from_upscaled_dualres.json` | Same as above, dual-res variant: SfM solves on downscaled panos, cube faces are cut from the full 8K. Cheaper solve, sharper faces. | `ComfyUI-VideoHelperSuite` |
-| `2c_spheresfm_from_panoramas.json` | Pure SphereSfM: hand it *any* panorama folder with no COLMAP data yet and it builds the dataset. Frame stride lives on the node, and filling `hires_dir` turns the same graph back into the dual-res variant. | `ComfyUI-VideoHelperSuite` |
-| `4_hires_add_to_dataset.json` | Render high-resolution pinhole views straight from the pano (no WAN) and register them into an existing dataset. | `ComfyUI-VideoHelperSuite` |
-| `4a_hires_composite.json` | *Best texture, step 1 of 2.* Reproject the ORIGINAL 8K panorama through the same geometry the WAN clip was flown along, so the splat trains on real photograph and WAN only fills the holes. +115% reconstructed detail indoors, +338% outdoors. See [docs/HIRES_COMPOSITE.md](docs/HIRES_COMPOSITE.md). | `ComfyUI-VideoHelperSuite` |
-| `4b_hires_composite_to_dataset.json` | *Step 2.* Dual-res SphereSfM over the composite: poses solved on the proxies, cube faces cut from the 8K frames. | `ComfyUI-VideoHelperSuite` |
-| `_all_nodes_overview.json` | Not a pipeline — a catalogue. Every node in the pack, grouped by module, all muted so Queue does nothing. Load it to see the whole surface at once. | — |
+| `0_generate_360_panorama-upscale.json` | Make the input pano itself. Two modes on one switch: **text→pano** (Krea 2 Turbo generates a 2:1 equirect directly) and **image→pano** (Qwen-Image-Edit + a 360 LoRA turns any photo into a full ERP). Both finish with a detail-refine pass, a roll-180°-inpaint seam fix so the wrap edge is invisible, and an upscale tail. | `comfyui-LatLong`, `ComfyUI_essentials`, `ComfyUI_UltimateSDUpscale`, `ComfyUI-Mickmumpitz-Nodes` |
+| `1_generate-dataset-hires.json` | The main graph, pano → trained-splat-ready dataset in one queue. Draw a camera path on the pano, WAN fills in the fly-through, **HiRes Composite** reprojects the ORIGINAL panorama through the same geometry so the splat trains on real detail and WAN only fills the holes (+115% reconstructed detail indoors, +338% outdoors — see [docs/HIRES_COMPOSITE.md](docs/HIRES_COMPOSITE.md)), and dual-res SphereSfM writes the COLMAP dataset: poses solved on proxies, cube faces cut from the high-res frames. | — |
 
 Everything else these graphs use is core ComfyUI. Install the packs in the right-hand
 column only for the workflows you actually run — nothing in the node pack itself depends
@@ -83,8 +79,7 @@ wrong prompt visibly degrades what WAN paints into the holes.
 ## Nodes
 
 Nineteen nodes, all under the **SplatKit** category. There is no dead code behind them:
-every class in the pack is registered. Load `workflows/_all_nodes_overview.json` to see
-them all laid out at once.
+every class in the pack is registered.
 
 **Core** (`nodes/common.py`, `nodes/camera_plot.py`, `nodes/wan.py`) — `Dataset Project`,
 `MoGe Model Loader`, `Camera Plot Fly-Through (Geometry)` (draw the camera path against the
@@ -125,20 +120,21 @@ node still works — the path is just a text widget.
 
 SeedVR2 is a **temporal** upscaler, so the order it reads frames in matters.
 
-- **`mode=colmap_now`** (default) → `2a`. Builds the cube-face COLMAP dataset now, then
+- **`mode=colmap_now`** (default). Builds the cube-face COLMAP dataset now, then
   upscales it in place. The cube reprojector writes 6 faces per video frame; read lexically,
   the view flips 6× per frame and starves the upscaler of context. So the node records a
   **camera-major** order in `p2s_dataset.json`, and `Load Dataset Images (Ordered)` feeds
   the upscaler each cube face as a coherent per-view sub-video, writing every frame back to
   its original filename so `sparse/0/images.bin` still matches.
-- **`mode=panorama_only`** → `2b1` then `2b2`, *best quality*. Skips SfM and saves the raw
-  equirect panoramas. `2b1` upscales them to 8K **one frame at a time**, streaming each
-  result straight to disk (`Save Upscaled Frames (Streaming)`); `2b2` then runs SphereSfM on
-  the upscaled panoramas — sharper input means denser features and a cleaner cloud.
+- **`mode=panorama_only`**, *best quality*. Skips SfM and saves the raw equirect panoramas.
+  Upscale them to 8K **one frame at a time**, streaming each result straight to disk
+  (`Save Upscaled Frames (Streaming)`), then run SphereSfM on the upscaled panoramas
+  (`SphereSfM Dataset (Dual-Res)` pointed at the folder) — sharper input means denser
+  features and a cleaner cloud.
 
-  The split into two graphs is not cosmetic: holding a whole 8K panorama sequence in a
-  single tensor is tens of GB, so `2b1` runs at `meta_batch=1` and never materialises the
-  full stack. Run `2b1` to completion, then `2b2`.
+  The frame-at-a-time pass is not cosmetic: holding a whole 8K panorama sequence in a
+  single tensor is tens of GB, so the upscale runs at `meta_batch=1` and never materialises
+  the full stack. Run it to completion before starting the SfM pass.
 
 Both folder swaps are idempotent: originals move to `<images>_lowres/` and are kept forever;
 re-runs read the originals.
