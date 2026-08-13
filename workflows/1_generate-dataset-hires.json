@@ -1,8 +1,8 @@
 {
   "id": "wf1c-generate-dataset-hires",
   "revision": 0,
-  "last_node_id": 89,
-  "last_link_id": 174,
+  "last_node_id": 90,
+  "last_link_id": 177,
   "nodes": [
     {
       "id": 30,
@@ -1303,55 +1303,6 @@
         "Node name for S&R": "VAEDecode"
       },
       "widgets_values": []
-    },
-    {
-      "id": 61,
-      "type": "SaveVideo",
-      "pos": [
-        870,
-        4030
-      ],
-      "size": [
-        380,
-        106
-      ],
-      "flags": {
-        "collapsed": false
-      },
-      "order": 41,
-      "mode": 2,
-      "inputs": [
-        {
-          "name": "video",
-          "type": "VIDEO",
-          "link": 117
-        },
-        {
-          "name": "filename_prefix",
-          "type": "STRING",
-          "widget": {
-            "name": "filename_prefix"
-          },
-          "link": 132
-        }
-      ],
-      "outputs": [
-        {
-          "name": "video",
-          "type": "VIDEO",
-          "links": null
-        }
-      ],
-      "properties": {
-        "cnr_id": "comfy-core",
-        "ver": "0.24.0",
-        "Node name for S&R": "SaveVideo"
-      },
-      "widgets_values": [
-        "control/control_video_extra",
-        "auto",
-        "auto"
-      ]
     },
     {
       "id": 16,
@@ -2970,74 +2921,6 @@
       "bgcolor": "#FFFFFFFF"
     },
     {
-      "id": 41,
-      "type": "SplatKit_DatasetProject",
-      "pos": [
-        -250,
-        580
-      ],
-      "size": [
-        420,
-        130
-      ],
-      "flags": {},
-      "order": 13,
-      "mode": 0,
-      "inputs": [],
-      "outputs": [
-        {
-          "name": "dataset_dir",
-          "type": "STRING",
-          "links": [
-            68,
-            69,
-            70,
-            82,
-            119,
-            127,
-            137,
-            143,
-            149,
-            155,
-            161,
-            172
-          ]
-        },
-        {
-          "name": "control_rgb_prefix",
-          "type": "STRING",
-          "links": [
-            72,
-            73,
-            78,
-            79,
-            100,
-            116,
-            130,
-            131,
-            132,
-            133
-          ]
-        },
-        {
-          "name": "control_mask_prefix",
-          "type": "STRING",
-          "links": null
-        }
-      ],
-      "properties": {
-        "aux_id": "mickmumpitz/ComfyUI-SplatKit",
-        "ver": "2c4d23360b5d29ee0feca88a336097c641119135",
-        "Node name for S&R": "SplatKit_DatasetProject"
-      },
-      "widgets_values": [
-        "250_studio-garden",
-        false
-      ],
-      "color": "#E0E0E0FF",
-      "bgcolor": "#FFFFFFFF"
-    },
-    {
       "id": 34,
       "type": "SplatKit_CameraPlotRenderControlGeo",
       "pos": [
@@ -3129,6 +3012,240 @@
       ]
     },
     {
+      "id": 77,
+      "type": "Note",
+      "pos": [
+        3400,
+        200
+      ],
+      "size": [
+        760,
+        700
+      ],
+      "flags": {},
+      "order": 13,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "properties": {},
+      "widgets_values": [
+        "PANORAMA TO COLMAP DATASET, IN ONE QUEUE\n\nWorkflow 1, plus the HiRes Composite, plus the dataset build. Press Queue once.\n\n  panorama -> Camera Plot -> WAN -> HiRes Composite -> SphereSfM (dual-res) -> dataset\n\nWHAT THE COMPOSITE ADDS\nWAN repaints every pixel, so your panorama's real texture is replaced by generated\napproximation -- and differently in every frame. A splat has to explain every view with ONE\n3D model, so that disagreement becomes blur. The composite reprojects your ORIGINAL\npanorama through the same geometry along the same rail, and keeps WAN only for the holes.\nMeasured: +115% reconstructed detail indoors, +338% outdoors.\n\nYOU ONLY SET TWO THINGS\n  1. Load Image      -> your FULL-RESOLUTION panorama (8192x4096).\n                        This is the whole point. A 2K image here gives you the WAN clip back\n                        and nothing more. Camera Plot downscales it internally by itself, so\n                        one loader feeds both the texture and the geometry.\n  2. Dataset Project -> the project name. It drives the composite output folders too.\n  (plus the dataset name on the SphereSfM node at the far right, and your prompt.)\n\nWIRED FOR YOU\n  * each Camera Plot's rail_json -> its own composite. That is the exact path that branch's\n    WAN clip flew, and the one thing the composite cannot guess. Never share a rail between\n    branches: a wrong rail lands the texture in the wrong place everywhere, and the coverage\n    number will NOT warn you (it is built from geometry only, it never looks at WAN).\n  * each branch's VAEDecode -> its composite's wan_frames.\n  * composite proxies -> the dataset node's pano_frames_1..4, and composite 1's hires_dir ->\n    its hires_dir. Wiring them (rather than pointing at a folder) is what forces ComfyUI to\n    finish every composite before the dataset build starts.\n\nFRAME DENSITY ('frames' on each composite) -- measured on a 5090, 8192 wide, 4 paths:\n  0-80/2   (default)  41 of 81, EVENLY spaced.   27 min,  3.8 GB.  No sparse tail.\n  all                 81 of 81.                  50 min,  7.4 GB.  Adjacent frames overlap\n                      heavily, so most of that is redundancy -- and SfM matches every pair,\n                      so 324 frames is ~10x the matching work of 164.\n  0-15,16-/8          25 of 81, front-loaded.    18 min,  2.3 GB.  The old default: it was a\n                      COST saving from when the upscaler dominated the composite (12s/frame).\n                      In geometry mode the upscaler only fills holes, so a frame now costs\n                      8.5s and that saving is no longer worth the sparse tail -- the far end\n                      of each path is exactly where the splat is weakest.\nSet the SAME value on every composite -- the dataset node checks that the proxy count\nmatches the hi-res file count and stops if they disagree.\n\nSET output_width TO YOUR PANORAMA'S WIDTH (8192). Below that the source is minified before\nit is ever sampled, and past 4 source-pixels-per-output-pixel it is rejected entirely --\nat 2048 against an 8K pano you get pure WAN and coverage ~0. The node warns you.\n\nTHE 5th BRANCH IS MUTED, as in workflow 1, and so is its composite. The dataset node has\nfour pano_frames slots, so if you un-mute branch 5 you have run out -- put that composite's\nproxies through the folder route instead (4b_hires_composite_to_dataset.json).\n\nTHE OLD SphereSfM NODE IS MUTED. It built the dataset from raw WAN panoramas; you now build\nit from the composites. Un-mute it only if you want both for comparison.\n\nTHEN TRAIN -- and do not leave the cap at its default:\n  LichtFeld-Studio.exe -d \"<dataset>\" -o \"<dataset>\\splat\" --headless --train --no-splash ^\n      --eval --test-every 8 -r 1 --max-width 4096 --max-cap 3000000\nLichtFeld's 1M default silently hides the resolution gain: 1M -> 3M is +0.62 dB."
+      ],
+      "color": "#432",
+      "bgcolor": "#653"
+    },
+    {
+      "id": 78,
+      "type": "UpscaleModelLoader",
+      "pos": [
+        2300,
+        0
+      ],
+      "size": [
+        400,
+        60
+      ],
+      "flags": {},
+      "order": 14,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "UPSCALE_MODEL",
+          "type": "UPSCALE_MODEL",
+          "slot_index": 0,
+          "links": [
+            139,
+            145,
+            151,
+            157,
+            163
+          ]
+        }
+      ],
+      "title": "Upscaler for the WAN hole-fill",
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.30.0",
+        "Node name for S&R": "UpscaleModelLoader"
+      },
+      "widgets_values": [
+        "4x-UltraSharp.pth"
+      ]
+    },
+    {
+      "id": 84,
+      "type": "SplatKit_SphereSfMDatasetDualRes",
+      "pos": [
+        2860,
+        200
+      ],
+      "size": [
+        480,
+        620
+      ],
+      "flags": {},
+      "order": 66,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "pano_frames_1",
+          "type": "IMAGE",
+          "link": 164
+        },
+        {
+          "name": "pano_frames_2",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": 165
+        },
+        {
+          "name": "pano_frames_3",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": 166
+        },
+        {
+          "name": "pano_frames_4",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": 167
+        },
+        {
+          "name": "hires_dir",
+          "type": "STRING",
+          "widget": {
+            "name": "hires_dir"
+          },
+          "link": 168
+        },
+        {
+          "name": "output_name",
+          "type": "STRING",
+          "widget": {
+            "name": "output_name"
+          },
+          "link": 172
+        }
+      ],
+      "outputs": [
+        {
+          "name": "model_dir",
+          "type": "STRING",
+          "slot_index": 0,
+          "links": null
+        },
+        {
+          "name": "num_images",
+          "type": "INT",
+          "slot_index": 1,
+          "links": null
+        },
+        {
+          "name": "num_points",
+          "type": "INT",
+          "slot_index": 2,
+          "links": null
+        }
+      ],
+      "title": "Build the COLMAP dataset from the composites (dual-res)",
+      "properties": {
+        "aux_id": "mickmumpitz/ComfyUI-SplatKit",
+        "ver": "afebf27519a225eca1d9ffe3affd58b8b6bfd1b5",
+        "Node name for S&R": "SplatKit_SphereSfMDatasetDualRes"
+      },
+      "widgets_values": [
+        "",
+        "my_scene_hires",
+        "exhaustive",
+        "stop",
+        0,
+        8192,
+        0.0066,
+        10,
+        32768,
+        4,
+        1.5,
+        4,
+        30,
+        1,
+        "camera_major",
+        "*.png",
+        1,
+        0
+      ],
+      "color": "#C1C1C1FF",
+      "bgcolor": "#E0E0E0FF"
+    },
+    {
+      "id": 41,
+      "type": "SplatKit_DatasetProject",
+      "pos": [
+        -250,
+        580
+      ],
+      "size": [
+        420,
+        130
+      ],
+      "flags": {},
+      "order": 15,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "dataset_dir",
+          "type": "STRING",
+          "links": [
+            68,
+            69,
+            70,
+            82,
+            119,
+            137,
+            143,
+            149,
+            155,
+            161,
+            172,
+            176
+          ]
+        },
+        {
+          "name": "control_rgb_prefix",
+          "type": "STRING",
+          "links": [
+            72,
+            73,
+            78,
+            79,
+            100,
+            116,
+            130,
+            131,
+            132,
+            133
+          ]
+        },
+        {
+          "name": "control_mask_prefix",
+          "type": "STRING",
+          "links": null
+        }
+      ],
+      "properties": {
+        "aux_id": "mickmumpitz/ComfyUI-SplatKit",
+        "ver": "2c4d23360b5d29ee0feca88a336097c641119135",
+        "Node name for S&R": "SplatKit_DatasetProject"
+      },
+      "widgets_values": [
+        "D:\\comfy\\ComfyUI\\output\\270_studio-garden-add-to-dataset",
+        false
+      ],
+      "color": "#E0E0E0FF",
+      "bgcolor": "#FFFFFFFF"
+    },
+    {
       "id": 62,
       "type": "SplatKit_CameraPlotRenderControlGeo",
       "pos": [
@@ -3207,7 +3324,7 @@
         "Node name for S&R": "SplatKit_CameraPlotRenderControlGeo"
       },
       "widgets_values": [
-        "0.000, 0.000, 0.000, -2.585, 0.652, 2.430\n-1.139, 1.923, 0.866, -2.818, 2.195, 2.233\n-2.140, 3.884, 1.747, -3.576, 4.045, 3.432",
+        "0.000, 0.000, 0.000, -0.928, -0.582, -0.754\n-0.428, 0.215, -0.735, -0.722, -0.616, -1.190\n-0.085, 0.254, -1.169, -0.107, -0.571, -1.569\n0.524, 0.280, -1.570, 0.595, -0.571, -1.833",
         "per_point_look",
         81,
         "camplot_path5",
@@ -3217,6 +3334,526 @@
         "",
         null,
         null
+      ]
+    },
+    {
+      "id": 61,
+      "type": "SaveVideo",
+      "pos": [
+        870,
+        4030
+      ],
+      "size": [
+        380,
+        106
+      ],
+      "flags": {
+        "collapsed": false
+      },
+      "order": 41,
+      "mode": 2,
+      "inputs": [
+        {
+          "name": "video",
+          "type": "VIDEO",
+          "link": 117
+        },
+        {
+          "name": "filename_prefix",
+          "type": "STRING",
+          "widget": {
+            "name": "filename_prefix"
+          },
+          "link": 132
+        }
+      ],
+      "outputs": [
+        {
+          "name": "video",
+          "type": "VIDEO",
+          "links": null
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.24.0",
+        "Node name for S&R": "SaveVideo"
+      },
+      "widgets_values": [
+        "control/control_video_extra",
+        "auto",
+        "auto"
+      ]
+    },
+    {
+      "id": 90,
+      "type": "SplatKit_SphereSfMAddToDatasetDualRes",
+      "pos": [
+        2820,
+        3700
+      ],
+      "size": [
+        460,
+        520
+      ],
+      "flags": {},
+      "order": 68,
+      "mode": 2,
+      "inputs": [
+        {
+          "name": "pano_frames_1",
+          "type": "IMAGE",
+          "link": 177
+        },
+        {
+          "name": "pano_frames_2",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "pano_frames_3",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "pano_frames_4",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "dataset_dir",
+          "type": "STRING",
+          "widget": {
+            "name": "dataset_dir"
+          },
+          "link": 176
+        },
+        {
+          "name": "hires_dir",
+          "type": "STRING",
+          "widget": {
+            "name": "hires_dir"
+          },
+          "link": 175
+        }
+      ],
+      "outputs": [
+        {
+          "name": "model_dir",
+          "type": "STRING",
+          "links": null
+        },
+        {
+          "name": "num_images",
+          "type": "INT",
+          "links": null
+        },
+        {
+          "name": "num_points",
+          "type": "INT",
+          "links": null
+        },
+        {
+          "name": "num_added_frames",
+          "type": "INT",
+          "links": null
+        }
+      ],
+      "title": "SphereSfM Add Camera Path to Dataset (Dual-Res)",
+      "properties": {
+        "aux_id": "mickmumpitz/ComfyUI-SplatKit",
+        "ver": "ae95eb77db2687a8d858f1e825d540bfff2e4677",
+        "Node name for S&R": "SplatKit_SphereSfMAddToDatasetDualRes"
+      },
+      "widgets_values": [
+        "",
+        "",
+        "traj04_*.png",
+        1,
+        0,
+        "exhaustive",
+        false,
+        true,
+        0,
+        8192,
+        0.0066,
+        10,
+        32768,
+        30,
+        "camera_major"
+      ],
+      "color": "#E0E0E0FF",
+      "bgcolor": "#FFFFFFFF"
+    },
+    {
+      "id": 83,
+      "type": "SplatKit_HiResComposite",
+      "pos": [
+        2300,
+        3700
+      ],
+      "size": [
+        480,
+        640
+      ],
+      "flags": {},
+      "order": 61,
+      "mode": 2,
+      "inputs": [
+        {
+          "name": "panorama_hires",
+          "type": "IMAGE",
+          "link": 158
+        },
+        {
+          "name": "panorama_geometry",
+          "type": "IMAGE",
+          "link": 159
+        },
+        {
+          "name": "wan_frames",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": 162
+        },
+        {
+          "name": "upscale_model",
+          "shape": 7,
+          "type": "UPSCALE_MODEL",
+          "link": 163
+        },
+        {
+          "name": "moge_model",
+          "shape": 7,
+          "type": "MOGE_MODEL",
+          "link": null
+        },
+        {
+          "name": "rail",
+          "type": "STRING",
+          "widget": {
+            "name": "rail"
+          },
+          "link": 160
+        },
+        {
+          "name": "set_name",
+          "type": "STRING",
+          "widget": {
+            "name": "set_name"
+          },
+          "link": 161
+        }
+      ],
+      "outputs": [
+        {
+          "name": "hires_dir",
+          "type": "STRING",
+          "slot_index": 0,
+          "links": [
+            175
+          ]
+        },
+        {
+          "name": "proxy_frames",
+          "type": "IMAGE",
+          "slot_index": 1,
+          "links": [
+            177
+          ]
+        },
+        {
+          "name": "gate_masks",
+          "type": "IMAGE",
+          "slot_index": 2,
+          "links": null
+        },
+        {
+          "name": "report",
+          "type": "STRING",
+          "slot_index": 3,
+          "links": null
+        },
+        {
+          "name": "proxy_dir",
+          "type": "STRING",
+          "slot_index": 4,
+          "links": null
+        }
+      ],
+      "title": "HiRes Composite - camplot_path5",
+      "properties": {
+        "aux_id": "mickmumpitz/ComfyUI-SplatKit",
+        "ver": "afebf27519a225eca1d9ffe3affd58b8b6bfd1b5",
+        "Node name for S&R": "SplatKit_HiResComposite"
+      },
+      "widgets_values": [
+        "",
+        "",
+        5,
+        8192,
+        "geometry",
+        "0-80/2",
+        2048,
+        2,
+        6,
+        1440,
+        "geometry_res",
+        "auto (download)",
+        4,
+        1024,
+        true,
+        false,
+        "all",
+        "hard_soft_edge",
+        "off"
+      ]
+    },
+    {
+      "id": 82,
+      "type": "SplatKit_HiResComposite",
+      "pos": [
+        2300,
+        2810
+      ],
+      "size": [
+        480,
+        640
+      ],
+      "flags": {},
+      "order": 59,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "panorama_hires",
+          "type": "IMAGE",
+          "link": 152
+        },
+        {
+          "name": "panorama_geometry",
+          "type": "IMAGE",
+          "link": 153
+        },
+        {
+          "name": "wan_frames",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": 156
+        },
+        {
+          "name": "upscale_model",
+          "shape": 7,
+          "type": "UPSCALE_MODEL",
+          "link": 157
+        },
+        {
+          "name": "moge_model",
+          "shape": 7,
+          "type": "MOGE_MODEL",
+          "link": null
+        },
+        {
+          "name": "rail",
+          "type": "STRING",
+          "widget": {
+            "name": "rail"
+          },
+          "link": 154
+        },
+        {
+          "name": "set_name",
+          "type": "STRING",
+          "widget": {
+            "name": "set_name"
+          },
+          "link": 155
+        }
+      ],
+      "outputs": [
+        {
+          "name": "hires_dir",
+          "type": "STRING",
+          "slot_index": 0,
+          "links": null
+        },
+        {
+          "name": "proxy_frames",
+          "type": "IMAGE",
+          "slot_index": 1,
+          "links": [
+            167
+          ]
+        },
+        {
+          "name": "gate_masks",
+          "type": "IMAGE",
+          "slot_index": 2,
+          "links": null
+        },
+        {
+          "name": "report",
+          "type": "STRING",
+          "slot_index": 3,
+          "links": null
+        },
+        {
+          "name": "proxy_dir",
+          "type": "STRING",
+          "slot_index": 4,
+          "links": null
+        }
+      ],
+      "title": "HiRes Composite - camplot_path4",
+      "properties": {
+        "aux_id": "mickmumpitz/ComfyUI-SplatKit",
+        "ver": "afebf27519a225eca1d9ffe3affd58b8b6bfd1b5",
+        "Node name for S&R": "SplatKit_HiResComposite"
+      },
+      "widgets_values": [
+        "",
+        "",
+        3,
+        8192,
+        "geometry",
+        "0-80/2",
+        2048,
+        2,
+        6,
+        1440,
+        "geometry_res",
+        "auto (download)",
+        4,
+        1024,
+        true,
+        false,
+        "all",
+        "hard_soft_edge",
+        "off"
+      ]
+    },
+    {
+      "id": 81,
+      "type": "SplatKit_HiResComposite",
+      "pos": [
+        2300,
+        1940
+      ],
+      "size": [
+        480,
+        640
+      ],
+      "flags": {},
+      "order": 57,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "panorama_hires",
+          "type": "IMAGE",
+          "link": 146
+        },
+        {
+          "name": "panorama_geometry",
+          "type": "IMAGE",
+          "link": 147
+        },
+        {
+          "name": "wan_frames",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": 150
+        },
+        {
+          "name": "upscale_model",
+          "shape": 7,
+          "type": "UPSCALE_MODEL",
+          "link": 151
+        },
+        {
+          "name": "moge_model",
+          "shape": 7,
+          "type": "MOGE_MODEL",
+          "link": null
+        },
+        {
+          "name": "rail",
+          "type": "STRING",
+          "widget": {
+            "name": "rail"
+          },
+          "link": 148
+        },
+        {
+          "name": "set_name",
+          "type": "STRING",
+          "widget": {
+            "name": "set_name"
+          },
+          "link": 149
+        }
+      ],
+      "outputs": [
+        {
+          "name": "hires_dir",
+          "type": "STRING",
+          "slot_index": 0,
+          "links": null
+        },
+        {
+          "name": "proxy_frames",
+          "type": "IMAGE",
+          "slot_index": 1,
+          "links": [
+            166
+          ]
+        },
+        {
+          "name": "gate_masks",
+          "type": "IMAGE",
+          "slot_index": 2,
+          "links": null
+        },
+        {
+          "name": "report",
+          "type": "STRING",
+          "slot_index": 3,
+          "links": null
+        },
+        {
+          "name": "proxy_dir",
+          "type": "STRING",
+          "slot_index": 4,
+          "links": null
+        }
+      ],
+      "title": "HiRes Composite - camplot_path3",
+      "properties": {
+        "aux_id": "mickmumpitz/ComfyUI-SplatKit",
+        "ver": "afebf27519a225eca1d9ffe3affd58b8b6bfd1b5",
+        "Node name for S&R": "SplatKit_HiResComposite"
+      },
+      "widgets_values": [
+        "",
+        "",
+        2,
+        8192,
+        "geometry",
+        "0-80/2",
+        2048,
+        2,
+        6,
+        1440,
+        "geometry_res",
+        "auto (download)",
+        4,
+        1024,
+        true,
+        false,
+        "all",
+        "hard_soft_edge",
+        "off"
       ]
     },
     {
@@ -3334,11 +3971,11 @@
         "auto (download)",
         4,
         1024,
+        true,
         false,
-        false,
-        "wan",
+        "all",
         "hard_soft_edge",
-        "luma"
+        "off"
       ]
     },
     {
@@ -3458,642 +4095,12 @@
         "auto (download)",
         4,
         1024,
-        false,
+        true,
         false,
         "all",
         "hard_soft_edge",
-        "luma"
+        "off"
       ]
-    },
-    {
-      "id": 81,
-      "type": "SplatKit_HiResComposite",
-      "pos": [
-        2300,
-        1940
-      ],
-      "size": [
-        480,
-        640
-      ],
-      "flags": {},
-      "order": 57,
-      "mode": 0,
-      "inputs": [
-        {
-          "name": "panorama_hires",
-          "type": "IMAGE",
-          "link": 146
-        },
-        {
-          "name": "panorama_geometry",
-          "type": "IMAGE",
-          "link": 147
-        },
-        {
-          "name": "wan_frames",
-          "shape": 7,
-          "type": "IMAGE",
-          "link": 150
-        },
-        {
-          "name": "upscale_model",
-          "shape": 7,
-          "type": "UPSCALE_MODEL",
-          "link": 151
-        },
-        {
-          "name": "moge_model",
-          "shape": 7,
-          "type": "MOGE_MODEL",
-          "link": null
-        },
-        {
-          "name": "rail",
-          "type": "STRING",
-          "widget": {
-            "name": "rail"
-          },
-          "link": 148
-        },
-        {
-          "name": "set_name",
-          "type": "STRING",
-          "widget": {
-            "name": "set_name"
-          },
-          "link": 149
-        }
-      ],
-      "outputs": [
-        {
-          "name": "hires_dir",
-          "type": "STRING",
-          "slot_index": 0,
-          "links": null
-        },
-        {
-          "name": "proxy_frames",
-          "type": "IMAGE",
-          "slot_index": 1,
-          "links": [
-            166
-          ]
-        },
-        {
-          "name": "gate_masks",
-          "type": "IMAGE",
-          "slot_index": 2,
-          "links": null
-        },
-        {
-          "name": "report",
-          "type": "STRING",
-          "slot_index": 3,
-          "links": null
-        },
-        {
-          "name": "proxy_dir",
-          "type": "STRING",
-          "slot_index": 4,
-          "links": null
-        }
-      ],
-      "title": "HiRes Composite - camplot_path3",
-      "properties": {
-        "aux_id": "mickmumpitz/ComfyUI-SplatKit",
-        "ver": "afebf27519a225eca1d9ffe3affd58b8b6bfd1b5",
-        "Node name for S&R": "SplatKit_HiResComposite"
-      },
-      "widgets_values": [
-        "",
-        "",
-        2,
-        8192,
-        "geometry",
-        "0-80/2",
-        2048,
-        2,
-        6,
-        1440,
-        "geometry_res",
-        "auto (download)",
-        4,
-        1024,
-        false,
-        false,
-        "wan",
-        "hard_soft_edge",
-        "luma"
-      ]
-    },
-    {
-      "id": 82,
-      "type": "SplatKit_HiResComposite",
-      "pos": [
-        2300,
-        2810
-      ],
-      "size": [
-        480,
-        640
-      ],
-      "flags": {},
-      "order": 59,
-      "mode": 0,
-      "inputs": [
-        {
-          "name": "panorama_hires",
-          "type": "IMAGE",
-          "link": 152
-        },
-        {
-          "name": "panorama_geometry",
-          "type": "IMAGE",
-          "link": 153
-        },
-        {
-          "name": "wan_frames",
-          "shape": 7,
-          "type": "IMAGE",
-          "link": 156
-        },
-        {
-          "name": "upscale_model",
-          "shape": 7,
-          "type": "UPSCALE_MODEL",
-          "link": 157
-        },
-        {
-          "name": "moge_model",
-          "shape": 7,
-          "type": "MOGE_MODEL",
-          "link": null
-        },
-        {
-          "name": "rail",
-          "type": "STRING",
-          "widget": {
-            "name": "rail"
-          },
-          "link": 154
-        },
-        {
-          "name": "set_name",
-          "type": "STRING",
-          "widget": {
-            "name": "set_name"
-          },
-          "link": 155
-        }
-      ],
-      "outputs": [
-        {
-          "name": "hires_dir",
-          "type": "STRING",
-          "slot_index": 0,
-          "links": null
-        },
-        {
-          "name": "proxy_frames",
-          "type": "IMAGE",
-          "slot_index": 1,
-          "links": [
-            167
-          ]
-        },
-        {
-          "name": "gate_masks",
-          "type": "IMAGE",
-          "slot_index": 2,
-          "links": null
-        },
-        {
-          "name": "report",
-          "type": "STRING",
-          "slot_index": 3,
-          "links": null
-        },
-        {
-          "name": "proxy_dir",
-          "type": "STRING",
-          "slot_index": 4,
-          "links": null
-        }
-      ],
-      "title": "HiRes Composite - camplot_path4",
-      "properties": {
-        "aux_id": "mickmumpitz/ComfyUI-SplatKit",
-        "ver": "afebf27519a225eca1d9ffe3affd58b8b6bfd1b5",
-        "Node name for S&R": "SplatKit_HiResComposite"
-      },
-      "widgets_values": [
-        "",
-        "",
-        3,
-        8192,
-        "geometry",
-        "0-80/2",
-        2048,
-        2,
-        6,
-        1440,
-        "geometry_res",
-        "auto (download)",
-        4,
-        1024,
-        false,
-        false,
-        "wan",
-        "hard_soft_edge",
-        "luma"
-      ]
-    },
-    {
-      "id": 83,
-      "type": "SplatKit_HiResComposite",
-      "pos": [
-        2300,
-        3700
-      ],
-      "size": [
-        480,
-        640
-      ],
-      "flags": {},
-      "order": 61,
-      "mode": 2,
-      "inputs": [
-        {
-          "name": "panorama_hires",
-          "type": "IMAGE",
-          "link": 158
-        },
-        {
-          "name": "panorama_geometry",
-          "type": "IMAGE",
-          "link": 159
-        },
-        {
-          "name": "wan_frames",
-          "shape": 7,
-          "type": "IMAGE",
-          "link": 162
-        },
-        {
-          "name": "upscale_model",
-          "shape": 7,
-          "type": "UPSCALE_MODEL",
-          "link": 163
-        },
-        {
-          "name": "moge_model",
-          "shape": 7,
-          "type": "MOGE_MODEL",
-          "link": null
-        },
-        {
-          "name": "rail",
-          "type": "STRING",
-          "widget": {
-            "name": "rail"
-          },
-          "link": 160
-        },
-        {
-          "name": "set_name",
-          "type": "STRING",
-          "widget": {
-            "name": "set_name"
-          },
-          "link": 161
-        }
-      ],
-      "outputs": [
-        {
-          "name": "hires_dir",
-          "type": "STRING",
-          "slot_index": 0,
-          "links": null
-        },
-        {
-          "name": "proxy_frames",
-          "type": "IMAGE",
-          "slot_index": 1,
-          "links": [
-            174
-          ]
-        },
-        {
-          "name": "gate_masks",
-          "type": "IMAGE",
-          "slot_index": 2,
-          "links": null
-        },
-        {
-          "name": "report",
-          "type": "STRING",
-          "slot_index": 3,
-          "links": null
-        },
-        {
-          "name": "proxy_dir",
-          "type": "STRING",
-          "slot_index": 4,
-          "links": null
-        }
-      ],
-      "title": "HiRes Composite - camplot_path5",
-      "properties": {
-        "aux_id": "mickmumpitz/ComfyUI-SplatKit",
-        "ver": "afebf27519a225eca1d9ffe3affd58b8b6bfd1b5",
-        "Node name for S&R": "SplatKit_HiResComposite"
-      },
-      "widgets_values": [
-        "",
-        "",
-        4,
-        8192,
-        "geometry",
-        "0-80/2",
-        2048,
-        2,
-        6,
-        1440,
-        "geometry_res",
-        "auto (download)",
-        4,
-        1024,
-        false,
-        false,
-        "wan",
-        "hard_soft_edge",
-        "luma"
-      ]
-    },
-    {
-      "id": 65,
-      "type": "SplatKit_SphereSfMAddToDataset",
-      "pos": [
-        2820,
-        3700
-      ],
-      "size": [
-        460,
-        470
-      ],
-      "flags": {},
-      "order": 68,
-      "mode": 2,
-      "inputs": [
-        {
-          "name": "pano_frames_1",
-          "shape": 7,
-          "type": "IMAGE",
-          "link": 174
-        },
-        {
-          "name": "pano_frames_2",
-          "shape": 7,
-          "type": "IMAGE",
-          "link": null
-        },
-        {
-          "name": "pano_frames_3",
-          "shape": 7,
-          "type": "IMAGE",
-          "link": null
-        },
-        {
-          "name": "pano_frames_4",
-          "shape": 7,
-          "type": "IMAGE",
-          "link": null
-        },
-        {
-          "name": "dataset_dir",
-          "type": "STRING",
-          "widget": {
-            "name": "dataset_dir"
-          },
-          "link": 127
-        }
-      ],
-      "outputs": [
-        {
-          "name": "model_dir",
-          "type": "STRING",
-          "slot_index": 0,
-          "links": []
-        },
-        {
-          "name": "num_images",
-          "type": "INT",
-          "slot_index": 1,
-          "links": null
-        },
-        {
-          "name": "num_points",
-          "type": "INT",
-          "slot_index": 2,
-          "links": null
-        },
-        {
-          "name": "num_added_frames",
-          "type": "INT",
-          "slot_index": 3,
-          "links": null
-        }
-      ],
-      "title": "SphereSfM Add Camera Path to Dataset",
-      "properties": {
-        "aux_id": "mickmumpitz/ComfyUI-SplatKit",
-        "ver": "ae95eb77db2687a8d858f1e825d540bfff2e4677",
-        "Node name for S&R": "SplatKit_SphereSfMAddToDataset"
-      },
-      "widgets_values": [
-        "",
-        1,
-        0,
-        "exhaustive",
-        false,
-        true,
-        0,
-        8192,
-        0.0066,
-        10,
-        32768,
-        30,
-        "camera_major"
-      ],
-      "color": "#E0E0E0FF",
-      "bgcolor": "#FFFFFFFF"
-    },
-    {
-      "id": 78,
-      "type": "UpscaleModelLoader",
-      "pos": [
-        2300,
-        10
-      ],
-      "size": [
-        400,
-        60
-      ],
-      "flags": {},
-      "order": 14,
-      "mode": 0,
-      "inputs": [],
-      "outputs": [
-        {
-          "name": "UPSCALE_MODEL",
-          "type": "UPSCALE_MODEL",
-          "slot_index": 0,
-          "links": [
-            139,
-            145,
-            151,
-            157,
-            163
-          ]
-        }
-      ],
-      "title": "Upscaler for the WAN hole-fill",
-      "properties": {
-        "cnr_id": "comfy-core",
-        "ver": "0.30.0",
-        "Node name for S&R": "UpscaleModelLoader"
-      },
-      "widgets_values": [
-        "4x-UltraSharp.pth"
-      ]
-    },
-    {
-      "id": 77,
-      "type": "Note",
-      "pos": [
-        3400,
-        210
-      ],
-      "size": [
-        760,
-        700
-      ],
-      "flags": {},
-      "order": 15,
-      "mode": 0,
-      "inputs": [],
-      "outputs": [],
-      "properties": {},
-      "widgets_values": [
-        "PANORAMA TO COLMAP DATASET, IN ONE QUEUE\n\nWorkflow 1, plus the HiRes Composite, plus the dataset build. Press Queue once.\n\n  panorama -> Camera Plot -> WAN -> HiRes Composite -> SphereSfM (dual-res) -> dataset\n\nWHAT THE COMPOSITE ADDS\nWAN repaints every pixel, so your panorama's real texture is replaced by generated\napproximation -- and differently in every frame. A splat has to explain every view with ONE\n3D model, so that disagreement becomes blur. The composite reprojects your ORIGINAL\npanorama through the same geometry along the same rail, and keeps WAN only for the holes.\nMeasured: +115% reconstructed detail indoors, +338% outdoors.\n\nYOU ONLY SET TWO THINGS\n  1. Load Image      -> your FULL-RESOLUTION panorama (8192x4096).\n                        This is the whole point. A 2K image here gives you the WAN clip back\n                        and nothing more. Camera Plot downscales it internally by itself, so\n                        one loader feeds both the texture and the geometry.\n  2. Dataset Project -> the project name. It drives the composite output folders too.\n  (plus the dataset name on the SphereSfM node at the far right, and your prompt.)\n\nWIRED FOR YOU\n  * each Camera Plot's rail_json -> its own composite. That is the exact path that branch's\n    WAN clip flew, and the one thing the composite cannot guess. Never share a rail between\n    branches: a wrong rail lands the texture in the wrong place everywhere, and the coverage\n    number will NOT warn you (it is built from geometry only, it never looks at WAN).\n  * each branch's VAEDecode -> its composite's wan_frames.\n  * composite proxies -> the dataset node's pano_frames_1..4, and composite 1's hires_dir ->\n    its hires_dir. Wiring them (rather than pointing at a folder) is what forces ComfyUI to\n    finish every composite before the dataset build starts.\n\nFRAME DENSITY ('frames' on each composite) -- measured on a 5090, 8192 wide, 4 paths:\n  0-80/2   (default)  41 of 81, EVENLY spaced.   27 min,  3.8 GB.  No sparse tail.\n  all                 81 of 81.                  50 min,  7.4 GB.  Adjacent frames overlap\n                      heavily, so most of that is redundancy -- and SfM matches every pair,\n                      so 324 frames is ~10x the matching work of 164.\n  0-15,16-/8          25 of 81, front-loaded.    18 min,  2.3 GB.  The old default: it was a\n                      COST saving from when the upscaler dominated the composite (12s/frame).\n                      In geometry mode the upscaler only fills holes, so a frame now costs\n                      8.5s and that saving is no longer worth the sparse tail -- the far end\n                      of each path is exactly where the splat is weakest.\nSet the SAME value on every composite -- the dataset node checks that the proxy count\nmatches the hi-res file count and stops if they disagree.\n\nSET output_width TO YOUR PANORAMA'S WIDTH (8192). Below that the source is minified before\nit is ever sampled, and past 4 source-pixels-per-output-pixel it is rejected entirely --\nat 2048 against an 8K pano you get pure WAN and coverage ~0. The node warns you.\n\nTHE 5th BRANCH IS MUTED, as in workflow 1, and so is its composite. The dataset node has\nfour pano_frames slots, so if you un-mute branch 5 you have run out -- put that composite's\nproxies through the folder route instead (4b_hires_composite_to_dataset.json).\n\nTHE OLD SphereSfM NODE IS MUTED. It built the dataset from raw WAN panoramas; you now build\nit from the composites. Un-mute it only if you want both for comparison.\n\nTHEN TRAIN -- and do not leave the cap at its default:\n  LichtFeld-Studio.exe -d \"<dataset>\" -o \"<dataset>\\splat\" --headless --train --no-splash ^\n      --eval --test-every 8 -r 1 --max-width 4096 --max-cap 3000000\nLichtFeld's 1M default silently hides the resolution gain: 1M -> 3M is +0.62 dB."
-      ],
-      "color": "#432",
-      "bgcolor": "#653"
-    },
-    {
-      "id": 84,
-      "type": "SplatKit_SphereSfMDatasetDualRes",
-      "pos": [
-        2860,
-        209.0527511851047
-      ],
-      "size": [
-        480,
-        620
-      ],
-      "flags": {},
-      "order": 66,
-      "mode": 0,
-      "inputs": [
-        {
-          "name": "pano_frames_1",
-          "type": "IMAGE",
-          "link": 164
-        },
-        {
-          "name": "pano_frames_2",
-          "shape": 7,
-          "type": "IMAGE",
-          "link": 165
-        },
-        {
-          "name": "pano_frames_3",
-          "shape": 7,
-          "type": "IMAGE",
-          "link": 166
-        },
-        {
-          "name": "pano_frames_4",
-          "shape": 7,
-          "type": "IMAGE",
-          "link": 167
-        },
-        {
-          "name": "hires_dir",
-          "type": "STRING",
-          "widget": {
-            "name": "hires_dir"
-          },
-          "link": 168
-        },
-        {
-          "name": "output_name",
-          "type": "STRING",
-          "widget": {
-            "name": "output_name"
-          },
-          "link": 172
-        }
-      ],
-      "outputs": [
-        {
-          "name": "model_dir",
-          "type": "STRING",
-          "slot_index": 0,
-          "links": null
-        },
-        {
-          "name": "num_images",
-          "type": "INT",
-          "slot_index": 1,
-          "links": null
-        },
-        {
-          "name": "num_points",
-          "type": "INT",
-          "slot_index": 2,
-          "links": null
-        }
-      ],
-      "title": "Build the COLMAP dataset from the composites (dual-res)",
-      "properties": {
-        "aux_id": "mickmumpitz/ComfyUI-SplatKit",
-        "ver": "afebf27519a225eca1d9ffe3affd58b8b6bfd1b5",
-        "Node name for S&R": "SplatKit_SphereSfMDatasetDualRes"
-      },
-      "widgets_values": [
-        "",
-        "my_scene_hires",
-        "exhaustive",
-        "stop",
-        0,
-        8192,
-        0.0066,
-        10,
-        32768,
-        4,
-        1.5,
-        4,
-        30,
-        1,
-        "camera_major",
-        "*.png",
-        1,
-        0
-      ],
-      "color": "#C1C1C1FF",
-      "bgcolor": "#E0E0E0FF"
     }
   ],
   "links": [
@@ -4954,14 +4961,6 @@
       "INT"
     ],
     [
-      127,
-      41,
-      0,
-      65,
-      4,
-      "STRING"
-    ],
-    [
       130,
       41,
       1,
@@ -5290,10 +5289,26 @@
       "INT"
     ],
     [
-      174,
+      175,
+      83,
+      0,
+      90,
+      5,
+      "STRING"
+    ],
+    [
+      176,
+      41,
+      0,
+      90,
+      4,
+      "STRING"
+    ],
+    [
+      177,
       83,
       1,
-      65,
+      90,
       0,
       "IMAGE"
     ]
@@ -5387,13 +5402,13 @@
   "config": {},
   "extra": {
     "ds": {
-      "scale": 0.21435888100001088,
+      "scale": 0.6727499949326006,
       "offset": [
-        3783.6687753944666,
-        302.3431073184397
+        295.81942108965376,
+        -3309.5546725117656
       ]
     },
-    "frontendVersion": "1.48.6",
+    "frontendVersion": "1.48.7",
     "VHS_latentpreview": true,
     "VHS_latentpreviewrate": 0,
     "VHS_MetadataImage": true,
