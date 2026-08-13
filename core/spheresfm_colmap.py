@@ -128,7 +128,7 @@ _PACK_BIN = os.path.join(_BIN_DIR, "colmap_sphere.exe")
 _BUNDLE_REPO = "mickmumpitz/ComfyUI-SplatKit"
 _BUNDLE_TAG = "spheresfm-bin-v1"
 _BUNDLE_ASSET = "colmap_sphere_cuda_win64.zip"
-_BUNDLE_SHA256 = "ca64b2a4d8f537bd0deb1996034c19ed2c02e59dc0d6ce3907bcc5b8e6e3e0d3"
+_BUNDLE_SHA256 = "85804badcad45a0b31e3154fc06a86a09eb79b7792b73b360c3954cd6a96038d"
 _BUNDLE_URL = os.environ.get("COLMAP_SPHERE_BUNDLE_URL") or (
     "https://github.com/%s/releases/download/%s/%s" % (_BUNDLE_REPO, _BUNDLE_TAG, _BUNDLE_ASSET))
 

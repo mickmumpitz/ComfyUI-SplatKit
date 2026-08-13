@@ -1,9 +1,3 @@
----
-status: ToDo
-tags:
-  - final-step
----
-> This is already ready, however auto install needs to be adjusted and verified with the final repo.
 # SphereSfM node — `colmap_sphere.exe`
 
 The **SphereSfM** dataset node (`SplatKit_SphereSfMDataset`) runs classical
@@ -274,6 +268,8 @@ Outputs: `model_dir` (STRING), `num_images` (INT, total cube faces), `num_points
 - **Needs real camera movement** — SphereSfM is genuine SfM; it requires parallax in the
   clip. Orbit / push-in / spiral trajectories work; a static pan won't triangulate.
 - Provenance, license, and build flags are in `bin/BUILD_INFO.txt` (BSD-3-Clause).
+- License notices for every runtime library bundled in the zip:
+  [SPHERESFM-THIRD-PARTY-NOTICES.txt](SPHERESFM-THIRD-PARTY-NOTICES.txt).
 
 ---
 
@@ -290,10 +286,12 @@ fetched by `core/spheresfm_colmap.py` (`_BUNDLE_REPO` / `_BUNDLE_TAG` / `_BUNDLE
    ```
 3. Compute its SHA-256 and paste it into `_BUNDLE_SHA256` in `core/spheresfm_colmap.py`
    (also bump `_BUNDLE_TAG` if you change the release tag).
-4. Create a GitHub Release on the repo named in `_BUNDLE_REPO` (currently still
-   `mickmumpitz/ComfyUI-Pano2Splat-Matrix`, this pack's previous name -- re-point it at
-   `mickmumpitz/ComfyUI-SplatKit` once the asset is attached to a Release here) with tag
+4. Create a GitHub Release on the repo named in `_BUNDLE_REPO` with tag
    `spheresfm-bin-v1` and upload `colmap_sphere_cuda_win64.zip` as an asset.
+   Link `docs/SPHERESFM-THIRD-PARTY-NOTICES.txt` in the release notes; the
+   per-library license notices live there (tracked in the repo), so the zip only
+   needs `LICENSE` + `COPYING.txt` + `BUILD_INFO.txt` alongside the binaries.
+   If the DLL set changes on a rebuild, update the notices file to match.
 
 The expected download URL is:
 `https://github.com/<repo>/releases/download/<tag>/colmap_sphere_cuda_win64.zip`

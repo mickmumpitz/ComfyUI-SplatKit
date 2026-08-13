@@ -294,6 +294,8 @@ MIT. Bundled third-party code lives in `vendored/` with its own licenses:
   `vendored/LICENSE-Matrix-3D.txt` and `vendored/NOTICE-Matrix-3D.txt`
 - **utils3d** (`vendored/utils3d`)
 - **SphereSfM** — BSD-3-Clause, downloaded as a binary at runtime, not redistributed here.
+  Notices for the runtime libraries bundled with it:
+  [docs/SPHERESFM-THIRD-PARTY-NOTICES.txt](docs/SPHERESFM-THIRD-PARTY-NOTICES.txt)
 
 Note that the **Matrix-3D pano LoRA** you supply yourself carries its own non-commercial /
 gated terms — check them before using output commercially.

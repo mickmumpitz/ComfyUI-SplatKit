@@ -1,0 +1,73 @@
+THIRD-PARTY NOTICES — SphereSfM binary bundle (colmap_sphere_cuda_win64.zip)
+=============================================================================
+
+The bundle auto-downloaded into bin/ contains colmap_sphere.exe, a CUDA build
+of SphereSfM (https://github.com/json87/SphereSfM), a spherical-camera fork of
+COLMAP (https://colmap.github.io), together with the unmodified third-party
+runtime libraries it dynamically links against (built via vcpkg; see
+bin/BUILD_INFO.txt for the exact toolchain and versions).
+
+Primary licenses, included in the bundle in full:
+  * bin/LICENSE      — SphereSfM, BSD-3-Clause
+  * bin/COPYING.txt  — COLMAP, BSD-3-Clause
+
+The bundled runtime libraries below are redistributed in unmodified binary
+form under their respective licenses. Full license texts and source code are
+available from each upstream project.
+
+  Boost 1.91 (boost_*.dll)                  Boost Software License 1.0
+                                            https://www.boost.org
+  Ceres Solver (ceres.dll)                  BSD-3-Clause
+                                            http://ceres-solver.org
+  gflags (gflags.dll)                       BSD-3-Clause
+  glog (glog.dll)                           BSD-3-Clause
+  SuiteSparse AMD/CAMD/CCOLAMD/COLAMD
+    (amd.dll, camd.dll, ccolamd.dll,
+     colamd.dll)                            BSD-3-Clause
+  SuiteSparse_config
+    (suitesparseconfig.dll)                 BSD-3-Clause
+  CHOLMOD (cholmod.dll)                     LGPL-2.1-or-later (some modules
+                                            GPL-2.0-or-later; see upstream)
+  SuiteSparseQR (spqr.dll)                  GPL-2.0-or-later
+                                            https://github.com/DrTimothyAldenDavis/SuiteSparse
+  METIS 5.x (metis.dll)                     Apache-2.0
+                                            https://github.com/KarypisLab/METIS
+  FLANN (flann.dll, flann_cpp.dll)          BSD-3-Clause
+  FreeImage / FreeImagePlus
+    (FreeImage.dll, FreeImagePlus.dll)      FreeImage Public License (FIPL) 1.0
+                                            https://freeimage.sourceforge.io
+  GLEW (glew32.dll)                         Modified BSD / MIT
+  OpenEXR 3.4 (OpenEXR*.dll, Iex-3_4.dll,
+    IlmThread-3_4.dll)                      BSD-3-Clause
+  Imath (Imath-3_2.dll)                     BSD-3-Clause
+  JasPer (jasper.dll)                       JasPer License 2.0 (MIT-style)
+  libjpeg-turbo (jpeg62.dll,
+    turbojpeg.dll)                          BSD-3-Clause / IJG / zlib
+  Little CMS (lcms2-2.dll)                  MIT
+  LAPACK (liblapack.dll)                    BSD-3-Clause
+  OpenBLAS (openblas.dll)                   BSD-3-Clause
+  xz / liblzma (liblzma.dll)                0BSD / public domain
+  libpng (libpng16.dll)                     PNG Reference Library License v2
+  libwebp (libwebp*.dll, libsharpyuv.dll)   BSD-3-Clause
+  libdeflate (deflate.dll)                  MIT
+  LZ4 (lz4.dll)                             BSD-2-Clause
+  OpenJPEG (openjp2.dll)                    BSD-2-Clause
+  OpenJPH (openjph.0.30.dll)                BSD-2-Clause
+  LibRaw (raw.dll, raw_r.dll)               LGPL-2.1 / CDDL-1.0 (dual)
+                                            https://www.libraw.org
+  SQLite (sqlite3.dll)                      Public domain
+  libtiff (tiff.dll)                        libtiff License (MIT-style)
+  zlib (z.dll)                              zlib License
+  GCC runtime (libgcc_s_seh-1.dll,
+    libgfortran-5.dll, libquadmath-0.dll)   GPL-3.0 with GCC Runtime Library
+                                            Exception (redistribution with
+                                            non-GPL binaries permitted)
+  MinGW-w64 winpthreads
+    (libwinpthread-1.dll)                   MIT-style (MinGW-w64 runtime)
+
+Statically linked into colmap_sphere.exe:
+  Eigen 3.4                                 MPL-2.0 (MPL2-only subset)
+                                            https://eigen.tuxfamily.org
+  NVIDIA CUDA Runtime (static)              NVIDIA CUDA Toolkit EULA
+                                            (redistribution as part of an
+                                            application is permitted)
