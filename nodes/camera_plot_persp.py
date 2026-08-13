@@ -431,6 +431,7 @@ class CameraPlotFlythroughPersp:
         if pts.shape[0] < 2:                                     # a single anchor = a still
             pts = np.concatenate([pts, pts[-1:] + np.array([[0.0, 0.0, 1e-3]])], axis=0)
             tgts = np.concatenate([tgts, tgts[-1:]], axis=0)
+        pts[0] = 0.0                                             # star pinned to the pano origin
         pts_r = pts.copy()
         pts_r[:, 1] *= -1.0                                      # editor +Y up -> world +Y down
         positions = _camplot_catmull_rom(pts_r, length) if length > 1 else pts_r[:1]

@@ -362,6 +362,12 @@ class CameraPlotRenderControlGeo:
         # --- parse anchors (+ optional per-anchor look targets) --------------
         anchor_pts, anchor_tgts = _camplot_parse_anchors_ext(anchors)  # (N,3),(N,3 NaN)
 
+        # The START anchor (the "star" in the editor) is pinned to the world origin: the
+        # panorama that defines the scene is captured at (0,0,0) and cannot move, so the
+        # fly-through MUST begin exactly there. Enforce it here so an edited/stale widget
+        # can never drift the start away from the pano's viewpoint.
+        anchor_pts[0] = 0.0
+
         # The editor/anchor frame is +Y UP (intuitive), but Matrix-3D's scene/world
         # frame is OpenCV-style +Y DOWN (see get_world_pcs_pano_torch_Rt's rot_matrix:
         # the pano zenith maps to camera -Y). The mapping is exactly P_render = [x,-y,z],

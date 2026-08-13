@@ -216,6 +216,16 @@ class CamPlotGeoEditor {
     this.targets = [];           // per-anchor look targets (parallel to points; null = none)
     this.dragTargetIndex = -1;   // which anchor's per-point look target is being dragged
 
+    // Manual pan/zoom per panel. null = auto-fit (the default framing); once the user
+    // scrolls or middle-drags a panel it holds an explicit {ca,cb,scl} world view so the
+    // framing stops auto-shrinking. `scl` is px-per-world-unit, so anchor handles and
+    // scene dots stay a constant on-screen size while only the map extent changes.
+    this.view = { top: null, side: null };
+    this.panning = false;        // middle-button pan in progress
+    this.panPanel = null;        // which panel key ("top"/"side") is being panned
+    this._panLast = null;        // last pointer pos during a pan
+    this._resetBtn = null;       // hit-rect for the reset-view button (set each render)
+
     // Sibling widgets (read-only refs; tolerate missing widgets).
     this.anchorsW = node.widgets?.find((w) => w.name === "anchors");
     this.orientW = node.widgets?.find((w) => w.name === "orientation");
@@ -261,6 +271,9 @@ class CamPlotGeoEditor {
     canvas.addEventListener("pointermove", (e) => this._onHover(e));
     canvas.addEventListener("dblclick", (e) => this._onDblClick(e));
     canvas.addEventListener("contextmenu", (e) => this._onContextMenu(e));
+    // Wheel = zoom the panel under the cursor (about the cursor). passive:false so we can
+    // preventDefault and keep LiteGraph's own canvas from zooming underneath us.
+    canvas.addEventListener("wheel", (e) => this._onWheel(e), { passive: false });
     this._onMove = (e) => this._onPointerMove(e);
     this._onUp = (e) => this._onPointerUp(e);
 
@@ -430,10 +443,18 @@ class CamPlotGeoEditor {
   }
 
   // --- widget sync ----------------------------------------------------------
+  // The start anchor (the "star") is pinned to the world origin -- the panorama that
+  // defines the scene is shot from (0,0,0) and cannot move, so the path must begin there.
+  // Enforced in the editor for WYSIWYG; the Python render enforces it again authoritatively.
+  _lockStar() {
+    if (this.points && this.points.length) this.points[0] = [0, 0, 0];
+  }
+
   _loadFromWidget() {
     const parsed = parseAnchors(this.anchorsW?.value) || parseAnchors(DEFAULT_ANCHORS);
     this.points = parsed.points;
     this.targets = parsed.targets;
+    this._lockStar();
     if (this._isPerPoint()) this._ensureTargets();
   }
 
@@ -447,6 +468,7 @@ class CamPlotGeoEditor {
           if (parsed) {
             this.points = parsed.points;
             this.targets = parsed.targets;
+            this._lockStar();
             if (this._isPerPoint()) this._ensureTargets();
             this.render();
           }
@@ -522,7 +544,18 @@ class CamPlotGeoEditor {
   // Build a fit for a panel. `extra` = extra world point to include (look-at target).
   // When the scene cloud is shown, its robust extent is folded in so you see the
   // path inside the room.
-  _fit(rect, ai, bi, extra) {
+  _fit(rect, ai, bi, extra, panelKey) {
+    const cx = rect.x + rect.w / 2, cy = rect.y + rect.h / 2;
+    // Manual pan/zoom overrides the auto-fit once the user has scrolled/panned this panel.
+    const manualView = panelKey ? this.view[panelKey] : null;
+    if (manualView) {
+      const { ca, cb, scl } = manualView;
+      return {
+        ai, bi, ca, cb, scl, rect,
+        toS: (a, b) => [cx + (a - ca) * scl, cy - (b - cb) * scl],
+        fromS: (sx, sy) => [(sx - cx) / scl + ca, -(sy - cy) / scl + cb],
+      };
+    }
     const pad = 26;
     const all = this.points.map((p) => [p[ai], p[bi]]);
     if (extra) all.push(extra);
@@ -550,7 +583,6 @@ class CamPlotGeoEditor {
     const ca = (aMin + aMax) / 2, cb = (bMin + bMax) / 2;
     const ra = Math.max(aMax - aMin, 1e-6), rb = Math.max(bMax - bMin, 1e-6);
     const scl = Math.min((rect.w - 2 * pad) / ra, (rect.h - 2 * pad) / rb);
-    const cx = rect.x + rect.w / 2, cy = rect.y + rect.h / 2;
     return {
       ai, bi, ca, cb, scl, rect,
       toS: (a, b) => [cx + (a - ca) * scl, cy - (b - cb) * scl],
@@ -604,9 +636,9 @@ class CamPlotGeoEditor {
       this.panels.side = this._frozenFit.side;
     } else {
       this.panels.top = this._fit(topRect, 0, 2,
-        target ? [target[0], target[2]] : null);
+        target ? [target[0], target[2]] : null, "top");
       this.panels.side = this._fit(sideRect, 2, 1,
-        target ? [target[2], target[1]] : null);
+        target ? [target[2], target[1]] : null, "side");
     }
     this._drawPanel(this.panels.top, "FLOOR  X →   Z ↑", positions, head, target);
     this._drawPanel(this.panels.side, "SIDE  Z →   Y ↑", positions, head, target);
@@ -615,11 +647,31 @@ class CamPlotGeoEditor {
     ctx.fillStyle = "rgba(200,200,200,0.45)";
     ctx.font = "10px monospace";
     const hint = this._isPerPoint()
-      ? "drag anchors + orange look-dots · dbl-click = add · right-click look-dot = reset"
-      : "drag dots · dbl-click empty = add · right-click dot = delete";
+      ? "drag anchors + orange look-dots · dbl-click = add · scroll/mid-drag = zoom/pan"
+      : "drag dots · dbl-click = add · scroll = zoom · middle-drag = pan";
     ctx.fillText(hint, gap + 4, cssH - 6);
 
     this._drawGeoButton(cssW, gap);
+    this._drawResetButton(gap);
+  }
+
+  // Reset-view button (left of the geo button). Clears any manual pan/zoom on both
+  // panels, dropping them back to auto-fit -- a one-click escape when you get lost.
+  _drawResetButton(gap) {
+    const ctx = this.ctx;
+    const label = "⟲ reset view";
+    ctx.font = "10px monospace";
+    const bw = ctx.measureText(label).width + 12, bh = 16;
+    const geo = this._geoBtn || { x: (this.canvas.clientWidth || 512) - gap, y: gap };
+    const bx = geo.x - gap - bw, by = gap;
+    this._resetBtn = { x: bx, y: by, w: bw, h: bh };
+    ctx.fillStyle = "rgba(15,15,18,0.78)";
+    ctx.fillRect(bx, by, bw, bh);
+    ctx.strokeStyle = "rgba(120,160,220,0.55)"; ctx.lineWidth = 1;
+    ctx.strokeRect(bx + 0.5, by + 0.5, bw - 1, bh - 1);
+    const active = this.view.top || this.view.side;
+    ctx.fillStyle = active ? "rgba(120,205,160,0.95)" : "rgba(185,185,185,0.85)";
+    ctx.fillText(label, bx + 6, by + 12);
   }
 
   // Geometry toggle / reload button (top-right of the whole canvas).
@@ -924,14 +976,45 @@ class CamPlotGeoEditor {
     return b && sx >= b.x && sx <= b.x + b.w && sy >= b.y && sy <= b.y + b.h;
   }
 
-  _panelAt(sx, sy) {
+  _inResetBtn(sx, sy) {
+    const b = this._resetBtn;
+    return b && sx >= b.x && sx <= b.x + b.w && sy >= b.y && sy <= b.y + b.h;
+  }
+
+  _panelKeyAt(sx, sy) {
     for (const key of ["top", "side"]) {
       const f = this.panels[key];
       if (!f) continue;
       const r = f.rect;
-      if (sx >= r.x && sx <= r.x + r.w && sy >= r.y && sy <= r.y + r.h) return f;
+      if (sx >= r.x && sx <= r.x + r.w && sy >= r.y && sy <= r.y + r.h) return key;
     }
     return null;
+  }
+
+  _panelAt(sx, sy) {
+    const key = this._panelKeyAt(sx, sy);
+    return key ? this.panels[key] : null;
+  }
+
+  // Wheel over a panel zooms it about the cursor. Anchor/scene marker sizes are drawn in
+  // constant screen px, so only the map extent grows/shrinks -- the dots stay put in size.
+  _onWheel(e) {
+    const [sx, sy] = this._localPos(e);
+    const key = this._panelKeyAt(sx, sy);
+    if (!key) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const fit = this.panels[key];
+    if (!fit) return;
+    const factor = Math.exp(-e.deltaY * 0.0015);   // wheel up -> zoom in
+    const scl = Math.max(1e-4, fit.scl * factor);
+    const [wa, wb] = fit.fromS(sx, sy);            // world point under the cursor
+    const cx = fit.rect.x + fit.rect.w / 2, cy = fit.rect.y + fit.rect.h / 2;
+    // Keep that world point fixed under the cursor after the zoom.
+    const ca = wa - (sx - cx) / scl;
+    const cb = wb + (sy - cy) / scl;
+    this.view[key] = { ca, cb, scl };
+    this.render();
   }
 
   _hitAnchor(fit, sx, sy) {
@@ -976,8 +1059,33 @@ class CamPlotGeoEditor {
   }
 
   _onPointerDown(e) {
+    // Middle button = pan the panel under the cursor (freeze its current fit into an
+    // explicit view first, so there is something concrete to slide around).
+    if (e.button === 1) {
+      const [sx, sy] = this._localPos(e);
+      const key = this._panelKeyAt(sx, sy);
+      if (!key) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const f = this.panels[key];
+      if (f) this.view[key] = { ca: f.ca, cb: f.cb, scl: f.scl };
+      this.panning = true;
+      this.panPanel = key;
+      this._panLast = [sx, sy];
+      this.canvas.style.cursor = "grabbing";
+      window.addEventListener("pointermove", this._onMove);
+      window.addEventListener("pointerup", this._onUp);
+      return;
+    }
     if (e.button !== 0) return; // left-drag only; right-click handled separately
     const [sx, sy] = this._localPos(e);
+    // Reset-view button: drop both panels back to auto-fit.
+    if (this._inResetBtn(sx, sy)) {
+      e.preventDefault(); e.stopPropagation();
+      this.view.top = null; this.view.side = null;
+      this.render();
+      return;
+    }
     // Geometry button: toggle visibility. When turning ON, recompute from the pano
     // if we have no cloud yet, else just reload the cached one.
     if (this._inGeoBtn(sx, sy)) {
@@ -1022,6 +1130,11 @@ class CamPlotGeoEditor {
     }
     const idx = this._hitAnchor(fit, sx, sy);
     if (idx < 0) return;
+    if (idx === 0) {   // the star is pinned to the origin -- swallow the click, don't drag
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
     e.preventDefault();
     e.stopPropagation();
     this.dragIndex = idx;
@@ -1034,6 +1147,20 @@ class CamPlotGeoEditor {
   }
 
   _onPointerMove(e) {
+    // Middle-button pan: slide the frozen view by the pointer delta (world = px / scl).
+    if (this.panning && this.panPanel) {
+      e.preventDefault();
+      e.stopPropagation();
+      const [sx, sy] = this._localPos(e);
+      const v = this.view[this.panPanel];
+      if (v && this._panLast) {
+        v.ca -= (sx - this._panLast[0]) / v.scl;
+        v.cb += (sy - this._panLast[1]) / v.scl;   // screen y is flipped vs world
+        this._panLast = [sx, sy];
+        this.render();
+      }
+      return;
+    }
     if (!this.dragPanel ||
         (this.dragIndex < 0 && !this.dragTarget && this.dragTargetIndex < 0)) return;
     e.preventDefault();
@@ -1062,6 +1189,15 @@ class CamPlotGeoEditor {
   }
 
   _onPointerUp() {
+    if (this.panning) {
+      this.panning = false;
+      this.panPanel = null;
+      this._panLast = null;
+      this.canvas.style.cursor = "crosshair";
+      window.removeEventListener("pointermove", this._onMove);
+      window.removeEventListener("pointerup", this._onUp);
+      return;
+    }
     if (this.dragIndex < 0 && !this.dragTarget && this.dragTargetIndex < 0) return;
     const wasGlobalTarget = this.dragTarget;
     this.dragIndex = -1;
@@ -1079,10 +1215,20 @@ class CamPlotGeoEditor {
   }
 
   _onHover(e) {
-    if (this.dragIndex >= 0 || this.dragTarget || this.dragTargetIndex >= 0) return;
+    if (this.dragIndex >= 0 || this.dragTarget || this.dragTargetIndex >= 0 ||
+        this.panning) return;
     const [sx, sy] = this._localPos(e);
-    if (this._inGeoBtn(sx, sy)) { this.canvas.style.cursor = "pointer"; return; }
+    if (this._inGeoBtn(sx, sy) || this._inResetBtn(sx, sy)) {
+      this.canvas.style.cursor = "pointer"; return;
+    }
     const fit = this._panelAt(sx, sy);
+    if (fit) {
+      // The star (anchor 0) is locked -- show that it can't be grabbed.
+      if (this._hitPerTarget(fit, sx, sy) < 0 && !this._hitTarget(fit, sx, sy) &&
+          this._hitAnchor(fit, sx, sy) === 0) {
+        this.canvas.style.cursor = "not-allowed"; return;
+      }
+    }
     const over = fit && (this._hitTarget(fit, sx, sy) ||
       this._hitPerTarget(fit, sx, sy) >= 0 || this._hitAnchor(fit, sx, sy) >= 0);
     this.canvas.style.cursor = over ? "grab" : "crosshair";
@@ -1090,7 +1236,7 @@ class CamPlotGeoEditor {
 
   _onDblClick(e) {
     const [sx, sy] = this._localPos(e);
-    if (this._inGeoBtn(sx, sy)) return;
+    if (this._inGeoBtn(sx, sy) || this._inResetBtn(sx, sy)) return;
     const fit = this._panelAt(sx, sy);
     if (!fit) return;
     if (this._hitAnchor(fit, sx, sy) >= 0) return; // don't add on top of a handle
@@ -1143,6 +1289,7 @@ class CamPlotGeoEditor {
     if (idx < 0) return; // let the default menu through on empty space
     e.preventDefault();
     e.stopPropagation();
+    if (idx === 0) return;               // the star is pinned -- never delete it
     if (this.points.length <= 2) return; // floor: keep >= 2 points
     this.points.splice(idx, 1);
     this.targets.splice(idx, 1);          // keep parallel with points
