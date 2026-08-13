@@ -628,9 +628,11 @@ def _ortho_view(pts, cols, ai, bi, proj_axis, sign, res_max=None,
         return None
     # Keep raster pixels ~square in world units so the blit isn't anisotropically blurry.
     if ext_a >= ext_b:
-        W = int(res_max); H = max(1, int(round(res_max * ext_b / ext_a)))
+        W = int(res_max)
+        H = max(1, int(round(res_max * ext_b / ext_a)))
     else:
-        H = int(res_max); W = max(1, int(round(res_max * ext_a / ext_b)))
+        H = int(res_max)
+        W = max(1, int(round(res_max * ext_a / ext_b)))
     px = np.round((a - lo_a) / ext_a * (W - 1)).astype(np.int64)
     py = np.round((hi_b - b) / ext_b * (H - 1)).astype(np.int64)   # row 0 == hi_b (top)
     inb = (px >= 0) & (px < W) & (py >= 0) & (py < H)

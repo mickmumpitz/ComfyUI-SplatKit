@@ -1135,7 +1135,9 @@ def _sparse_models_summary(sparse_root):
         with open(imgs, "rb") as f:
             n = struct.unpack("<Q", f.read(8))[0]
             for _ in range(n):
-                f.read(4); f.read(8 * 7); f.read(4)          # id, qvec, tvec, cam_id
+                f.read(4)                                    # id
+                f.read(8 * 7)                                # qvec, tvec
+                f.read(4)                                    # cam_id
                 nm = b""
                 while True:
                     ch = f.read(1)
@@ -1155,7 +1157,8 @@ def _sparse_models_summary(sparse_root):
                 if x == p + 1:
                     p = x
                 else:
-                    rngs.append((s, p)); s = p = x
+                    rngs.append((s, p))
+                    s = p = x
             rngs.append((s, p))
         out.append({"dir": d, "num_images": int(n), "frames": fr, "ranges": rngs})
     out.sort(key=lambda m: m["num_images"], reverse=True)

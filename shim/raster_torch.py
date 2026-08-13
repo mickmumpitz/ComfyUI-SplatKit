@@ -176,11 +176,15 @@ def _raster_triangles(tpos, tob, tfid, H, W, face_chunk):
     xmax = torch.ceil(torch.maximum(torch.maximum(p0a[:, 0], p1a[:, 0]), p2a[:, 0])).long()
     ymin = torch.floor(torch.minimum(torch.minimum(p0a[:, 1], p1a[:, 1]), p2a[:, 1])).long()
     ymax = torch.ceil(torch.maximum(torch.maximum(p0a[:, 1], p1a[:, 1]), p2a[:, 1])).long()
-    x0a = xmin.clamp(0, W - 1); x1a = xmax.clamp(0, W - 1)
-    y0a = ymin.clamp(0, H - 1); y1a = ymax.clamp(0, H - 1)
+    x0a = xmin.clamp(0, W - 1)
+    x1a = xmax.clamp(0, W - 1)
+    y0a = ymin.clamp(0, H - 1)
+    y1a = ymax.clamp(0, H - 1)
     ok = (area2_all.abs() > _EPS) & (xmax >= 0) & (xmin <= W - 1) & (ymax >= 0) & (ymin <= H - 1)
-    x0a = torch.where(ok, x0a, torch.ones_like(x0a)); x1a = torch.where(ok, x1a, torch.zeros_like(x1a))
-    y0a = torch.where(ok, y0a, torch.ones_like(y0a)); y1a = torch.where(ok, y1a, torch.zeros_like(y1a))
+    x0a = torch.where(ok, x0a, torch.ones_like(x0a))
+    x1a = torch.where(ok, x1a, torch.zeros_like(x1a))
+    y0a = torch.where(ok, y0a, torch.ones_like(y0a))
+    y1a = torch.where(ok, y1a, torch.zeros_like(y1a))
 
     # --- chunk by FRAGMENT budget, not face count (peak-VRAM guard) ---------
     # Each triangle emits (x1-x0+1)*(y1-y0+1) candidate fragments; honour both a
@@ -206,7 +210,8 @@ def _raster_triangles(tpos, tob, tfid, H, W, face_chunk):
                     prev += face_chunk
                     bounds.append(prev)
                 if x > prev:
-                    bounds.append(x); prev = x
+                    bounds.append(x)
+                    prev = x
             if not bounds or bounds[-1] != M:
                 while M - prev > face_chunk:
                     prev += face_chunk
@@ -224,7 +229,10 @@ def _raster_triangles(tpos, tob, tfid, H, W, face_chunk):
         ob012 = tob[sl]
         fid = tfid[sl]
         area2 = area2_all[sl]
-        x0 = x0a[sl]; x1 = x1a[sl]; y0 = y0a[sl]; y1 = y1a[sl]
+        x0 = x0a[sl]
+        x1 = x1a[sl]
+        y0 = y0a[sl]
+        y1 = y1a[sl]
 
         ti, px, py = _enumerate_fragments(x0, x1, y0, y1)
         if ti.numel() == 0:
@@ -241,8 +249,12 @@ def _raster_triangles(tpos, tob, tfid, H, W, face_chunk):
         inside = (b0 >= -_EPS) & (b1 >= -_EPS) & (b2 >= -_EPS)
         if not bool(inside.any()):
             continue
-        ti = ti[inside]; px = px[inside]; py = py[inside]
-        b0 = b0[inside]; b1 = b1[inside]; b2 = b2[inside]
+        ti = ti[inside]
+        px = px[inside]
+        py = py[inside]
+        b0 = b0[inside]
+        b1 = b1[inside]
+        b2 = b2[inside]
 
         # Perspective weights of the render-triangle's 3 vertices.
         pw0 = b0 * iw012[ti, 0]
@@ -266,7 +278,8 @@ def _raster_triangles(tpos, tob, tfid, H, W, face_chunk):
         wp = pix_s[first]
         sel = order[first]
         take = invw[sel] > best_invw[wp]
-        wp = wp[take]; sel = sel[take]
+        wp = wp[take]
+        sel = sel[take]
         best_invw[wp] = invw[sel]
         best_z[wp] = zf[sel]
         best_u[wp] = ob_pix[sel, 1]

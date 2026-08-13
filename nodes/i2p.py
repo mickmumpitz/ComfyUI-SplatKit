@@ -84,8 +84,10 @@ def _erp_chart(W, H, valid_np, grid_deg=10, floor=True):
                 cv2.polylines(img, [arr], False, color, thick, cv2.LINE_AA)
         for (x, y) in pts:
             if prev is not None and abs(x - prev) > W * 0.5:   # crossed the +/-180 wrap
-                flush(seg); seg = []
-            seg.append((int(round(x)), int(round(y)))); prev = x
+                flush(seg)
+                seg = []
+            seg.append((int(round(x)), int(round(y))))
+            prev = x
         flush(seg)
 
     light, mid, dark, lab = (218, 218, 218), (165, 165, 165), (95, 95, 95), (120, 120, 120)

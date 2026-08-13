@@ -110,11 +110,14 @@ def _clip_raster_kernel(pos_ptr,        # [V,4] f32 clip-space (x,y,z,w)
     i0 = tl.load(tri_ptr + f * 3 + 0).to(tl.int64)
     i1 = tl.load(tri_ptr + f * 3 + 1).to(tl.int64)
     i2 = tl.load(tri_ptr + f * 3 + 2).to(tl.int64)
-    x0 = tl.load(pos_ptr + i0 * 4 + 0); y0 = tl.load(pos_ptr + i0 * 4 + 1)
+    x0 = tl.load(pos_ptr + i0 * 4 + 0)
+    y0 = tl.load(pos_ptr + i0 * 4 + 1)
     w0 = tl.load(pos_ptr + i0 * 4 + 3)
-    x1 = tl.load(pos_ptr + i1 * 4 + 0); y1 = tl.load(pos_ptr + i1 * 4 + 1)
+    x1 = tl.load(pos_ptr + i1 * 4 + 0)
+    y1 = tl.load(pos_ptr + i1 * 4 + 1)
     w1 = tl.load(pos_ptr + i1 * 4 + 3)
-    x2 = tl.load(pos_ptr + i2 * 4 + 0); y2 = tl.load(pos_ptr + i2 * 4 + 1)
+    x2 = tl.load(pos_ptr + i2 * 4 + 0)
+    y2 = tl.load(pos_ptr + i2 * 4 + 1)
     w2 = tl.load(pos_ptr + i2 * 4 + 3)
 
     inn0 = w0 >= WNEAR
@@ -142,20 +145,32 @@ def _clip_raster_kernel(pos_ptr,        # [V,4] f32 clip-space (x,y,z,w)
         # Near-plane intersections A->B, A->C, C->A (t clamped as in the oracle).
         dab = bw - aw
         tab = tl.minimum(tl.maximum(tl.where(dab != 0, (WNEAR - aw) / dab, 0.0), 0.0), 1.0)
-        iabx = ax + tab * (bx - ax); iaby = ay + tab * (by - ay); iabw = aw + tab * dab
+        iabx = ax + tab * (bx - ax)
+        iaby = ay + tab * (by - ay)
+        iabw = aw + tab * dab
         dac = cw - aw
         tac = tl.minimum(tl.maximum(tl.where(dac != 0, (WNEAR - aw) / dac, 0.0), 0.0), 1.0)
-        iacx = ax + tac * (cx - ax); iacy = ay + tac * (cy - ay); iacw = aw + tac * dac
+        iacx = ax + tac * (cx - ax)
+        iacy = ay + tac * (cy - ay)
+        iacw = aw + tac * dac
         dca = aw - cw
         tca = tl.minimum(tl.maximum(tl.where(dca != 0, (WNEAR - cw) / dca, 0.0), 0.0), 1.0)
-        icax = cx + tca * (ax - cx); icay = cy + tca * (ay - cy); icaw = cw + tca * dca
+        icax = cx + tca * (ax - cx)
+        icay = cy + tca * (ay - cy)
+        icaw = cw + tca * dca
 
         # slot 0: (A,B,C) | (A, I_AB, I_AC) | (I_AB, B, C)
         c1 = cnt == 1
         c2 = cnt == 2
-        q0x = tl.where(c2, iabx, ax); q0y = tl.where(c2, iaby, ay); q0w = tl.where(c2, iabw, aw)
-        q1x = tl.where(c1, iabx, bx); q1y = tl.where(c1, iaby, by); q1w = tl.where(c1, iabw, bw)
-        q2x = tl.where(c1, iacx, cx); q2y = tl.where(c1, iacy, cy); q2w = tl.where(c1, iacw, cw)
+        q0x = tl.where(c2, iabx, ax)
+        q0y = tl.where(c2, iaby, ay)
+        q0w = tl.where(c2, iabw, aw)
+        q1x = tl.where(c1, iabx, bx)
+        q1y = tl.where(c1, iaby, by)
+        q1w = tl.where(c1, iabw, bw)
+        q2x = tl.where(c1, iacx, cx)
+        q2y = tl.where(c1, iacy, cy)
+        q2w = tl.where(c1, iacw, cw)
         low0 = (_IDX_MAX_C - f * 2).to(tl.int64)
         _raster_tri(q0x, q0y, q0w, q1x, q1y, q1w, q2x, q2y, q2w,
                     low0, zbuf_ptr, W, H, EPS=EPS, BLOCK=BLOCK)
@@ -257,7 +272,9 @@ def _raster_view(pos, tri_i32, tri_long, H, W):
     b0 = ((g1[:, 0] - sx) * (g2[:, 1] - sy) - (g1[:, 1] - sy) * (g2[:, 0] - sx)) * inv
     b1 = ((g2[:, 0] - sx) * (g0[:, 1] - sy) - (g2[:, 1] - sy) * (g0[:, 0] - sx)) * inv
     b2 = 1.0 - b0 - b1
-    pw0 = b0 * iw[:, 0]; pw1 = b1 * iw[:, 1]; pw2 = b2 * iw[:, 2]
+    pw0 = b0 * iw[:, 0]
+    pw1 = b1 * iw[:, 1]
+    pw2 = b2 * iw[:, 2]
     invw = pw0 + pw1 + pw2
     ob_pix = (pw0[:, None] * tob[:, 0] + pw1[:, None] * tob[:, 1]
               + pw2[:, None] * tob[:, 2]) / invw[:, None]

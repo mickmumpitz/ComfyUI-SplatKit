@@ -103,9 +103,13 @@ def test_tiny_near_plane_depth_ordering():
 
     def quad(zc):
         K = torch.zeros(4, 4)
-        K[0, 0] = 8 * 2 / W; K[1, 1] = 8 * 2 / H
-        K[2, 2] = (far + near) / (far - near); K[2, 3] = -2 * near * far / (far - near); K[3, 2] = 1
-        xs = zc * W / (2 * 8); ys = zc * H / (2 * 8)
+        K[0, 0] = 8 * 2 / W
+        K[1, 1] = 8 * 2 / H
+        K[2, 2] = (far + near) / (far - near)
+        K[2, 3] = -2 * near * far / (far - near)
+        K[3, 2] = 1
+        xs = zc * W / (2 * 8)
+        ys = zc * H / (2 * 8)
         pts = torch.tensor([[-xs, -ys, zc], [xs, -ys, zc], [xs, ys, zc], [-xs, ys, zc]])
         return torch.cat([pts, torch.ones(4, 1)], 1) @ K.T
 

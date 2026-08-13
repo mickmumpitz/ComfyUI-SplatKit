@@ -21,8 +21,10 @@ NEAR, FAR = 0.1, 100.0
 
 def diffrast_K(fx, fy):
     K = torch.zeros((4, 4), device=DEV)
-    K[0, 0] = fx * 2.0 / W; K[1, 1] = fy * 2.0 / H
-    K[2, 2] = (FAR + NEAR) / (FAR - NEAR); K[2, 3] = -2.0 * NEAR * FAR / (FAR - NEAR)
+    K[0, 0] = fx * 2.0 / W
+    K[1, 1] = fy * 2.0 / H
+    K[2, 2] = (FAR + NEAR) / (FAR - NEAR)
+    K[2, 3] = -2.0 * NEAR * FAR / (FAR - NEAR)
     K[3, 2] = 1.0
     return K
 
@@ -33,8 +35,10 @@ def make(grid):
     z = 3.0 + 0.7 * torch.sin(xs * 2.5) * torch.cos(ys * 2.5)
     verts = torch.stack([xs, ys, z], dim=-1).reshape(-1, 3)
     idx = torch.arange(grid * grid, device=DEV).reshape(grid, grid)
-    v00 = idx[:-1, :-1].reshape(-1); v10 = idx[1:, :-1].reshape(-1)
-    v01 = idx[:-1, 1:].reshape(-1); v11 = idx[1:, 1:].reshape(-1)
+    v00 = idx[:-1, :-1].reshape(-1)
+    v10 = idx[1:, :-1].reshape(-1)
+    v01 = idx[:-1, 1:].reshape(-1)
+    v11 = idx[1:, 1:].reshape(-1)
     tri = torch.cat([torch.stack([v00, v10, v01], -1),
                      torch.stack([v10, v11, v01], -1)], 0).int()
     K = diffrast_K(90.0, 90.0)
