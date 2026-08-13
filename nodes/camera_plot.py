@@ -436,7 +436,15 @@ class CameraPlotRenderControlGeo:
         os.makedirs(cond, exist_ok=True)
         np.savez(os.path.join(cond, "cameras.npz"), res["cameras"])
         ff_depth = res["firstframe_depth"].astype(np.float32)
-        cv2.imwrite(os.path.join(cond, "firstframe_depth.exr"), ff_depth)
+        # Debug/interop artifact -- nothing in the pack reads it back. opencv-python 5.x
+        # wheels ship no EXR codec (the OPENCV_IO_ENABLE_OPENEXR escape hatch is 4.x-only),
+        # so fall back to a raw .npy of the same float32 map rather than failing the node.
+        try:
+            _exr_ok = cv2.imwrite(os.path.join(cond, "firstframe_depth.exr"), ff_depth)
+        except cv2.error:
+            _exr_ok = False
+        if not _exr_ok:
+            np.save(os.path.join(cond, "firstframe_depth.npy"), ff_depth)
         ff_mask = (ff_depth < 0.9 * float(ff_depth.max())).astype(np.uint8) * 255
         cv2.imwrite(os.path.join(cond, "firstframe_mask.png"), ff_mask)
         _tC = _time.perf_counter()
