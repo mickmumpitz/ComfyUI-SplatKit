@@ -195,14 +195,14 @@ class HiResComposite:
                                "but it invents nothing, so big disocclusions smear."}),
                 "semantic_pano": ("IMAGE", {
                     "tooltip": "Optional pano-space mask (white = region), e.g. a SAM3 "
-                               "'window'/'mirror' segmentation of the panorama. It is "
-                               "reprojected through the SAME mesh + rail as the composite, "
-                               "and wherever it lands the panorama is DROPPED so WAN "
-                               "prevails -- even though geometry could explain those pixels. "
-                               "Use it for glass: the reprojected pano only carries a frozen "
-                               "reflection there, so WAN's moving one should win. Needs "
-                               "wan_frames wired. Inspect the landed region with "
-                               "debug_save=all -> debug/force_wan/."}),
+                               "'window'/'mirror' segmentation of the panorama. It is baked "
+                               "into the source panorama's alpha and reprojected along with "
+                               "it (no extra render pass), and wherever it lands the "
+                               "panorama is DROPPED so WAN prevails -- even though geometry "
+                               "could explain those pixels. Use it for glass: the "
+                               "reprojected pano only carries a frozen reflection there, so "
+                               "WAN's moving one should win. Needs wan_frames wired. Inspect "
+                               "the landed region with debug_save=all -> debug/force_wan/."}),
                 "upscale_model": ("UPSCALE_MODEL", {
                     "tooltip": "Optional upscaler for the WAN frames before they are "
                                "composited (Load Upscale Model -> here). 4x-UltraSharp v1 "

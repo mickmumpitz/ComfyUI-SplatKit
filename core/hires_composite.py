@@ -518,13 +518,14 @@ def run_composite(src_hi, pano_geo, rail, out_dir, wan=None, out_w=8192,
     wan        : [T, h, w, 3] uint8 WAN frames, or None (holes are then extrapolated
                  from the source instead of filled with generated content).
     semantic   : optional [H, W] or [H, W, 3] uint8 pano-space mask (white = region),
-                 e.g. a SAM3 'window'/'mirror' segmentation of pano_geo. It is
-                 reprojected through the SAME mesh + rail as everything else, so it
-                 lands pixel-aligned with the gate, and wherever it is set the source
-                 confidence is forced to zero -- the pano is DROPPED and WAN wins.
-                 That is the lever for glass/mirrors: the reprojected panorama only
-                 ever carries a frozen reflection, so on those surfaces WAN's moving
-                 reflection should prevail. Needs wan wired to be useful.
+                 e.g. a SAM3 'window'/'mirror' segmentation of the panorama. It is baked
+                 into the source as a KEEP alpha channel and rides the SAME mip pyramid +
+                 coordinate-field sample as the RGB -- so it lands pixel-aligned with the
+                 source, occlusion-correct, at zero extra render cost -- and wherever it
+                 samples to 0 the gate is forced to WAN. That is the lever for
+                 glass/mirrors: the reprojected panorama only ever carries a frozen
+                 reflection, so on those surfaces WAN's moving one should prevail. Needs
+                 wan wired to be useful.
     depth      : optional precomputed [h, w] float32 equirect depth; else MoGe runs.
     upscale    : callable(uint8 HxWx3) -> uint8, or None (bicubic).
     debug_save : which intermediate stages of the hole fill to also write to disk, under
@@ -557,19 +558,6 @@ def run_composite(src_hi, pano_geo, rail, out_dir, wan=None, out_w=8192,
     if pano_geo.shape[1] != gw:
         pano_geo = cv2.resize(pano_geo, (gw, gh), interpolation=cv2.INTER_AREA)
     H, W = pano_geo.shape[:2]
-
-    # --- optional semantic (force-WAN) texture, on the geometry grid ----------
-    # A pano-space mask reprojected as vertex colours through the same mesh, so it
-    # aligns with the gate exactly (see the semantic force in the gate build below).
-    sem_enc = None
-    if semantic is not None:
-        s = semantic[..., 0] if semantic.ndim == 3 else semantic
-        s = cv2.resize(s, (W, H), interpolation=cv2.INTER_AREA)
-        sem_enc = np.repeat((s.astype(np.float32) / 255.0)[..., None], 3, axis=2)
-        log(f"[HiResComposite] semantic force-WAN mask wired: {float((s > 127).mean()):.1%} "
-            f"of the panorama flagged -- the pano is dropped there, WAN prevails."
-            + ("" if wan is not None else "  <-- WARNING: no wan_frames wired, so the "
-               "flagged region falls back to source extrapolation, not generated content."))
 
     # --- depth ---------------------------------------------------------------
     t_setup = time.perf_counter()
@@ -629,7 +617,23 @@ def run_composite(src_hi, pano_geo, rail, out_dir, wan=None, out_w=8192,
     # Sampling an 8K texture through a minifying warp without mip-mapping aliases
     # badly (herringbone moire on grazing surfaces).
     t_setup = time.perf_counter()
-    src_t = torch.from_numpy(src_hi.astype(np.float32) / 255.0).permute(2, 0, 1)[None].to(device)
+    src_arr = src_hi.astype(np.float32) / 255.0                     # [H,W,3]
+    src_has_alpha = semantic is not None
+    if src_has_alpha:
+        # Bake the force-WAN mask into the source as a KEEP alpha channel (1 = keep the
+        # panorama, 0 = drop it -> window/mirror). It then rides the SAME mip pyramid and
+        # the SAME coordinate-field sample as the RGB, so the reprojected mask is
+        # pixel-aligned with the source by construction and occlusion-correct for free --
+        # no extra render pass. Where it samples to 0 the gate is forced to WAN (below).
+        s = semantic[..., 0] if semantic.ndim == 3 else semantic
+        s = cv2.resize(s, (src_hi.shape[1], src_hi.shape[0]), interpolation=cv2.INTER_AREA)
+        keep = 1.0 - (s.astype(np.float32) / 255.0 > float(P["sem_thresh"]))
+        src_arr = np.concatenate([src_arr, keep[..., None].astype(np.float32)], axis=2)
+        log(f"[HiResComposite] force-WAN mask baked into source alpha: "
+            f"{float((keep < 0.5).mean()):.1%} of the panorama dropped -> WAN prevails."
+            + ("" if wan is not None else "  <-- WARNING: no wan_frames wired; that region "
+               "falls back to source extrapolation, not generated content."))
+    src_t = torch.from_numpy(np.ascontiguousarray(src_arr)).permute(2, 0, 1)[None].to(device)
     pyr = [src_t]
     while min(pyr[-1].shape[-2:]) > 64 and len(pyr) < int(P["mip_levels"]):
         pyr.append(torch.nn.functional.avg_pool2d(pyr[-1], 2))
@@ -680,7 +684,7 @@ def run_composite(src_hi, pano_geo, rail, out_dir, wan=None, out_w=8192,
     for nm in LAYERS.get(dbg, []):
         if nm.startswith("wan") and wan is None:
             continue                             # nothing generated to dump
-        if nm == "force_wan" and sem_enc is None:
+        if nm == "force_wan" and semantic is None:
             continue                             # no semantic mask wired
 
         dbg_dirs[nm] = os.path.join(out_dir, "debug", nm)
@@ -743,16 +747,11 @@ def run_composite(src_hi, pano_geo, rail, out_dir, wan=None, out_w=8192,
         if base_mode != "geometry":
             with prof.bg("render_rgb"):
                 rgb_c, m_c = render_chunk(pano_geo.astype(np.float32) / 255.0, idxs)
-        sem_c = None
-        if sem_enc is not None:
-            with prof.bg("render_sem"):
-                sem_c, _ = render_chunk(sem_enc, idxs)
         if prof.on:
-            dt = time.perf_counter() - t_c
-            n = (2 if base_mode == "geometry" else 3) + (1 if sem_enc is not None else 0)
+            dt, n = time.perf_counter() - t_c, 2 if base_mode == "geometry" else 3
             log(f"[profile] render chunk of {len(idxs)} frames ({n} passes): {dt:.2f}s "
                 f"= {dt / max(len(idxs), 1):.2f}s/frame")
-        return rgb_c, m_c, u_c, v_c, sem_c
+        return rgb_c, m_c, u_c, v_c
 
     # The gate decides, per pixel, photo or WAN. Three ways to shape it:
     #   soft_original    -- the research project's gate, untouched: the boundary is
@@ -781,7 +780,7 @@ def run_composite(src_hi, pano_geo, rail, out_dir, wan=None, out_w=8192,
         # chunk of passes at geometry resolution is several GB, and this keeps two).
         source = (_ChunkPrefetch(render_all, chunks) if prefetch and len(chunks) > 1
                   else ((c, render_all(c)) for c in chunks))
-        for idxs, (rgb_c, m_c, u_c, v_c, sem_c) in _timed_iter(prof, source):
+        for idxs, (rgb_c, m_c, u_c, v_c) in _timed_iter(prof, source):
             for k, fi in enumerate(idxs):
                 fname = f"{name_prefix}{fi:04d}.png"
                 with prof.t("uv_decode"):
@@ -879,25 +878,6 @@ def run_composite(src_hi, pano_geo, rail, out_dir, wan=None, out_w=8192,
                         conf = m_w.clamp(0, 1) * rho_soft
                     else:
                         conf = m_w.clamp(0, 1) * keep * fb_soft * rho_soft
-                    # Semantic force-WAN: zero the source confidence inside the
-                    # reprojected mask (windows/mirrors), BEFORE the blur+threshold so
-                    # the boundary feathers through the same gate machinery as any other
-                    # edge -- no separate seam. The pano only carries a frozen reflection
-                    # there, so dropping it lets WAN's moving reflection win.
-                    if sem_c is not None:
-                        win = torch.from_numpy(
-                            np.ascontiguousarray(sem_c[k][..., 0])).to(device)
-                        win = (win > float(P["sem_thresh"])).float()
-                        # geometry mode: win already matches conf; wan mode's aligned
-                        # field can differ -- snap to conf's grid so the multiply is valid.
-                        if win.shape != conf.shape:
-                            win = torch.nn.functional.interpolate(
-                                win[None, None], size=tuple(conf.shape[-2:]),
-                                mode="nearest")[0, 0]
-                        conf = conf * (1.0 - win)
-                        if "force_wan" in dbg_dirs:
-                            writer.save(os.path.join(dbg_dirs["force_wan"], fname),
-                                        (win.cpu().numpy() * 255).astype(np.uint8))
                     conf = _blur_sigma_t(torch, cv2, conf, 6.0 * gs)
                     g = (conf > 0.55).float()
                     # The rejections are speckled: close small specks first so feathering
@@ -922,6 +902,12 @@ def run_composite(src_hi, pano_geo, rail, out_dir, wan=None, out_w=8192,
                         with prof.t("sample_source"):
                             hi_t = _sample_source(torch, pyr, uvw, out_h, out_w, src_w,
                                                   src_h, device, as_tensor=True)
+                            # Split off the baked force-WAN keep-alpha, sampled through
+                            # the exact same field as the RGB. keep_t is 0 on windows.
+                            keep_t = None
+                            if src_has_alpha:
+                                keep_t = (hi_t[:, 3:4] / 255.0).clamp(0, 1)
+                                hi_t = hi_t[:, :3].contiguous()
                         with prof.t("gate_upsample"):
                             gate_t = torch.nn.functional.interpolate(
                                 gf[None, None], size=(out_h, out_w),
@@ -936,6 +922,16 @@ def run_composite(src_hi, pano_geo, rail, out_dir, wan=None, out_w=8192,
                                     # or 1, so no area can be a part-mix.
                                     ek, ekn = _gauss1d(torch, cv2, edge_sig, gate_t.device)
                                     gate_t = _blur_t(torch, ek, ekn, gate_t)
+                            # Force-WAN: drop the panorama (gate -> 0) inside the baked
+                            # mask, so WAN's moving reflection wins on glass. Mip-feathered
+                            # by the pyramid, so the window edge stays clean.
+                            if keep_t is not None:
+                                gate_t = gate_t * keep_t
+                                if "force_wan" in dbg_dirs:
+                                    writer.save(
+                                        os.path.join(dbg_dirs["force_wan"], fname),
+                                        ((1 - keep_t).clamp(0, 1) * 255)
+                                        .to(torch.uint8)[0, 0].cpu().numpy())
                         with prof.t("wan_to_gpu"):
                             fill_t = None if wan_up is None else torch.from_numpy(
                                 np.ascontiguousarray(wan_up)).to(device) \
@@ -973,11 +969,15 @@ def run_composite(src_hi, pano_geo, rail, out_dir, wan=None, out_w=8192,
                             gate_small = torch.nn.functional.interpolate(
                                 (gate_t.clamp(0, 1) * 255), size=(ph, pw), mode="area"
                             ).to(torch.uint8)[0, 0].cpu().numpy()
-                        del hi_t, gate_t, fill_t, comp_t, comp_u8, prox_t
+                        del hi_t, gate_t, fill_t, comp_t, comp_u8, prox_t, keep_t
                     with prof.t("empty_cache"):
                         torch.cuda.empty_cache()
                 else:
                     hi = _sample_source(torch, pyr, uvw, out_h, out_w, src_w, src_h, device)
+                    keep_np = None
+                    if src_has_alpha:
+                        keep_np = np.clip(hi[..., 3:4] / 255.0, 0, 1)   # 0 on windows
+                        hi = hi[..., :3]
                     fused = _wan_fuse(cv2, np, hi, wan_up, P)
                     gate = cv2.resize(gf.cpu().numpy(), (out_w, out_h),
                                       interpolation=cv2.INTER_LINEAR)[..., None]
@@ -986,6 +986,11 @@ def run_composite(src_hi, pano_geo, rail, out_dir, wan=None, out_w=8192,
                         if edge_sig > 0:
                             gate = cv2.GaussianBlur(gate[..., 0], (0, 0),
                                                     edge_sig)[..., None]
+                    if keep_np is not None:                             # force-WAN on glass
+                        gate = gate * keep_np
+                        if "force_wan" in dbg_dirs:
+                            writer.save(os.path.join(dbg_dirs["force_wan"], fname),
+                                        ((1 - keep_np[..., 0]) * 255).astype(np.uint8))
                     if "source" in dbg_dirs:     # here the source side is the FUSED image
                         writer.save(os.path.join(dbg_dirs["source"], fname),
                                     np.clip(fused, 0, 255).astype(np.uint8))
@@ -1269,8 +1274,9 @@ def _sample_source(torch, pyr, uvw, out_h, out_w, src_w, src_h, device,
     """Sample the source mip pyramid through the coordinate field.
 
     ``uvw`` is [H, W, 2], either a host array or a tensor already on the device.
-    Returns [1, 3, out_h, out_w] on the device when ``as_tensor``, else
-    [out_h, out_w, 3] on the host. Both are 0..255.
+    Returns [1, C, out_h, out_w] on the device when ``as_tensor``, else
+    [out_h, out_w, C] on the host, where C is the pyramid's channel count (3, or 4
+    when a force-WAN keep-alpha has been baked into the source). Values are 0..255.
 
     Level of detail comes from the sampling Jacobian: how many source pixels does one
     output pixel cover? Trilinear between the two nearest mips.
@@ -1294,7 +1300,7 @@ def _sample_source(torch, pyr, uvw, out_h, out_w, src_w, src_h, device,
                             torch.sqrt(duy ** 2 + dvy ** 2))
         lod = torch.log2(rho.clamp_min(1.0)).clamp(0, len(pyr) - 1)
 
-        acc = torch.zeros(1, 3, out_h, out_w, device=device)
+        acc = torch.zeros(1, pyr[0].shape[1], out_h, out_w, device=device)
         for li, lvl in enumerate(pyr):
             wgt = (1.0 - (lod - li).abs()).clamp_min(0.0)
             if float(wgt.max()) == 0.0:
