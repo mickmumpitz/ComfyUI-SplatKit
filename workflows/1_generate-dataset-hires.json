@@ -2844,15 +2844,10 @@
             81,
             118,
             134,
-            135,
             140,
-            141,
             146,
-            147,
             152,
-            153,
-            158,
-            159
+            158
           ]
         },
         {
@@ -3504,14 +3499,9 @@
       "mode": 2,
       "inputs": [
         {
-          "name": "panorama_hires",
+          "name": "panorama",
           "type": "IMAGE",
           "link": 158
-        },
-        {
-          "name": "panorama_geometry",
-          "type": "IMAGE",
-          "link": 159
         },
         {
           "name": "wan_frames",
@@ -3628,14 +3618,9 @@
       "mode": 0,
       "inputs": [
         {
-          "name": "panorama_hires",
+          "name": "panorama",
           "type": "IMAGE",
           "link": 152
-        },
-        {
-          "name": "panorama_geometry",
-          "type": "IMAGE",
-          "link": 153
         },
         {
           "name": "wan_frames",
@@ -3750,14 +3735,9 @@
       "mode": 0,
       "inputs": [
         {
-          "name": "panorama_hires",
+          "name": "panorama",
           "type": "IMAGE",
           "link": 146
-        },
-        {
-          "name": "panorama_geometry",
-          "type": "IMAGE",
-          "link": 147
         },
         {
           "name": "wan_frames",
@@ -3872,14 +3852,9 @@
       "mode": 0,
       "inputs": [
         {
-          "name": "panorama_hires",
+          "name": "panorama",
           "type": "IMAGE",
           "link": 140
-        },
-        {
-          "name": "panorama_geometry",
-          "type": "IMAGE",
-          "link": 141
         },
         {
           "name": "wan_frames",
@@ -3994,14 +3969,9 @@
       "mode": 0,
       "inputs": [
         {
-          "name": "panorama_hires",
+          "name": "panorama",
           "type": "IMAGE",
           "link": 134
-        },
-        {
-          "name": "panorama_geometry",
-          "type": "IMAGE",
-          "link": 135
         },
         {
           "name": "wan_frames",
@@ -5001,19 +4971,11 @@
       "IMAGE"
     ],
     [
-      135,
-      3,
-      0,
-      79,
-      1,
-      "IMAGE"
-    ],
-    [
       136,
       27,
       4,
       79,
-      5,
+      4,
       "STRING"
     ],
     [
@@ -5021,7 +4983,7 @@
       41,
       0,
       79,
-      6,
+      5,
       "STRING"
     ],
     [
@@ -5029,7 +4991,7 @@
       18,
       0,
       79,
-      2,
+      1,
       "IMAGE"
     ],
     [
@@ -5037,7 +4999,7 @@
       78,
       0,
       79,
-      3,
+      2,
       "UPSCALE_MODEL"
     ],
     [
@@ -5049,19 +5011,11 @@
       "IMAGE"
     ],
     [
-      141,
-      3,
-      0,
-      80,
-      1,
-      "IMAGE"
-    ],
-    [
       142,
       29,
       4,
       80,
-      5,
+      4,
       "STRING"
     ],
     [
@@ -5069,7 +5023,7 @@
       41,
       0,
       80,
-      6,
+      5,
       "STRING"
     ],
     [
@@ -5077,7 +5031,7 @@
       39,
       0,
       80,
-      2,
+      1,
       "IMAGE"
     ],
     [
@@ -5085,7 +5039,7 @@
       78,
       0,
       80,
-      3,
+      2,
       "UPSCALE_MODEL"
     ],
     [
@@ -5097,19 +5051,11 @@
       "IMAGE"
     ],
     [
-      147,
-      3,
-      0,
-      81,
-      1,
-      "IMAGE"
-    ],
-    [
       148,
       34,
       4,
       81,
-      5,
+      4,
       "STRING"
     ],
     [
@@ -5117,7 +5063,7 @@
       41,
       0,
       81,
-      6,
+      5,
       "STRING"
     ],
     [
@@ -5125,7 +5071,7 @@
       40,
       0,
       81,
-      2,
+      1,
       "IMAGE"
     ],
     [
@@ -5133,7 +5079,7 @@
       78,
       0,
       81,
-      3,
+      2,
       "UPSCALE_MODEL"
     ],
     [
@@ -5145,19 +5091,11 @@
       "IMAGE"
     ],
     [
-      153,
-      3,
-      0,
-      82,
-      1,
-      "IMAGE"
-    ],
-    [
       154,
       47,
       4,
       82,
-      5,
+      4,
       "STRING"
     ],
     [
@@ -5165,7 +5103,7 @@
       41,
       0,
       82,
-      6,
+      5,
       "STRING"
     ],
     [
@@ -5173,7 +5111,7 @@
       50,
       0,
       82,
-      2,
+      1,
       "IMAGE"
     ],
     [
@@ -5181,7 +5119,7 @@
       78,
       0,
       82,
-      3,
+      2,
       "UPSCALE_MODEL"
     ],
     [
@@ -5193,19 +5131,11 @@
       "IMAGE"
     ],
     [
-      159,
-      3,
-      0,
-      83,
-      1,
-      "IMAGE"
-    ],
-    [
       160,
       62,
       4,
       83,
-      5,
+      4,
       "STRING"
     ],
     [
@@ -5213,7 +5143,7 @@
       41,
       0,
       83,
-      6,
+      5,
       "STRING"
     ],
     [
@@ -5221,7 +5151,7 @@
       57,
       0,
       83,
-      2,
+      1,
       "IMAGE"
     ],
     [
@@ -5229,7 +5159,7 @@
       78,
       0,
       83,
-      3,
+      2,
       "UPSCALE_MODEL"
     ],
     [

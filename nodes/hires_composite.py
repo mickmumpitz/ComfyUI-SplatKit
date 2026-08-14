@@ -121,12 +121,12 @@ class HiResComposite:
         stopped at LichtFeld's 1M default, which was hiding the resolution gain.
 
     WIRING
-      * ``panorama_hires`` -- the ORIGINAL full-resolution panorama (Poly Haven 8K, or
-        your upscaled pano). This is the whole point; a 2K image here buys nothing.
-      * ``panorama_geometry`` -- the panorama the Camera Plot / WAN branch was
-        conditioned on. Geometry MUST come from this one. Sourcing it from a different
-        copy (an HDR tonemap, a re-upscale) misaligns the composite against what WAN
-        generated: measured coverage collapsed 0.51 -> 0.04.
+      * ``panorama`` -- the ORIGINAL full-resolution panorama (Poly Haven 8K, or your
+        upscaled pano), the SAME image the Camera Plot / WAN branch was conditioned on.
+        It is both the detail source and, downscaled internally, the geometry: MoGe
+        depth is derived from it, so feeding a different copy (an HDR tonemap, a
+        re-upscale) misaligns the composite against what WAN generated -- measured
+        coverage collapsed 0.51 -> 0.04. A 2K image buys nothing on the detail side.
       * ``rail`` -- wire the Camera Plot node's ``condition_dir`` output. That node
         writes ``camplot_rail.json`` beside it, which is the exact rail WAN flew.
       * ``wan_frames`` -- optional. Without it the holes are extrapolated from the
@@ -144,17 +144,15 @@ class HiResComposite:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "panorama_hires": ("IMAGE", {
-                    "tooltip": "The ORIGINAL high-resolution panorama (8192x4096). Every "
-                               "output pixel that geometry can explain is read from this "
-                               "image, so its detail is the ceiling on the whole result."}),
-                "panorama_geometry": ("IMAGE", {
-                    "tooltip": "The panorama the Camera Plot / WAN branch was conditioned "
-                               "on -- normally the same image you fed Camera Plot. MoGe "
-                               "depth comes from THIS one so the reprojection lines up "
-                               "with what WAN generated. A different copy (HDR tonemap, "
-                               "re-upscale) misaligns it; measured coverage collapsed "
-                               "0.51 -> 0.04."}),
+                "panorama": ("IMAGE", {
+                    "tooltip": "The panorama, at its HIGHEST resolution (e.g. 8192x4096). "
+                               "It plays both roles: every output pixel geometry can explain "
+                               "is read from it (so its detail is the ceiling on the result), "
+                               "AND the MoGe depth / mesh is derived from it (downscaled to "
+                               "the geometry grid internally). This is the same image the "
+                               "Camera Plot / WAN branch was conditioned on -- feed the exact "
+                               "one, not an HDR-tonemapped or re-upscaled copy, or the "
+                               "reprojection stops lining up with what WAN generated."}),
                 "rail": ("STRING", {"default": "",
                     "tooltip": "Wire the Camera Plot node's rail_json output here -- the exact "
                                "camera path its WAN clip was flown along. Use rail_json, not "
@@ -197,7 +195,7 @@ class HiResComposite:
                                "but it invents nothing, so big disocclusions smear."}),
                 "semantic_pano": ("IMAGE", {
                     "tooltip": "Optional pano-space mask (white = region), e.g. a SAM3 "
-                               "'window'/'mirror' segmentation of panorama_geometry. It is "
+                               "'window'/'mirror' segmentation of the panorama. It is "
                                "reprojected through the SAME mesh + rail as the composite, "
                                "and wherever it lands the panorama is DROPPED so WAN "
                                "prevails -- even though geometry could explain those pixels. "
@@ -322,7 +320,7 @@ class HiResComposite:
     OUTPUT_NODE = True        # terminal-ish: it writes the composite frames to disk
     CATEGORY = "SplatKit"
 
-    def run(self, panorama_hires, panorama_geometry, rail, set_name, traj_index,
+    def run(self, panorama, rail, set_name, traj_index,
             output_width, base_mode, wan_frames=None, upscale_model=None,
             frames="all", proxy_width=2048, geom_scale=2, moge_level=6, merge_long=1440,
             depth_grid="geometry_res", moge_ckpt=_MOGE_AUTO, rho_hi=4.0, tone_work=1024,
@@ -333,17 +331,20 @@ class HiResComposite:
         from ..core import hires_composite as hc
 
         dev = str(comfy.model_management.get_torch_device())
-        src_hi = _u8(panorama_hires)[0]
-        pano_geo = _u8(panorama_geometry)[0]
+        # One panorama, both roles: the full-res image is the detail source, and the
+        # geometry/mesh is derived from a downscaled copy of it inside run_composite.
+        src_hi = _u8(panorama)[0]
+        pano_geo = src_hi
         wan = _u8(wan_frames) if wan_frames is not None else None
         sem = _u8(semantic_pano)[0] if semantic_pano is not None else None
         rail_np = hc.load_rail(rail)
 
-        if src_hi.shape[1] <= pano_geo.shape[1]:
-            print(f"[HiResComposite] WARNING: panorama_hires is {src_hi.shape[1]}px wide, "
-                  f"no larger than panorama_geometry ({pano_geo.shape[1]}px). This node "
-                  f"exists to recover detail the 2K conditioning image does not have -- "
-                  f"feed the ORIGINAL high-resolution panorama into panorama_hires.")
+        geom_w = 2048 * int(geom_scale)
+        if src_hi.shape[1] < geom_w:
+            print(f"[HiResComposite] NOTE: panorama is {src_hi.shape[1]}px wide, below the "
+                  f"{geom_w}px geometry grid -- it is upscaled for the mesh and the detail "
+                  f"ceiling is only {src_hi.shape[1]}px. Feed the highest-resolution "
+                  f"panorama you have (e.g. 8192) to get the most out of this node.")
 
         out_dir = _p2s_output_base(set_name)
         model, ckpt = _moge_for_node(moge_ckpt, moge_model)
