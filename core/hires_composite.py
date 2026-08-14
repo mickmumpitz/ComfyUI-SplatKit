@@ -70,6 +70,7 @@ DEFAULTS = dict(
     # hard_soft_edge | hard | soft_original -- see the gate build in run_composite
     gate_mode="hard_soft_edge",
     gate_edge=4.0,       # sigma of the edge fade, in OUTPUT pixels, for hard_soft_edge
+    sem_thresh=0.5,      # cutoff on the reprojected semantic mask -> force-WAN region
     mip_levels=5,        # mip pyramid depth for anti-aliased texture sampling
     chunk=10,            # frames per render call
     tone_sigma=96.0,     # geometry mode: hole-fill tone-match scale (output px)
@@ -473,6 +474,10 @@ wan_raw/       The WAN video frame as generated, at its own small size.
 wan_upscaled/  wan_raw after the upscale model, blown up to the output size.
 wan_fill/      wan_upscaled after brightness/colour matching -- what actually goes into
                the black parts of the gate.
+force_wan/     (only when a semantic mask is wired) White = the reprojected region
+               (e.g. windows/mirrors) where the panorama was deliberately DROPPED so
+               WAN prevails, regardless of what geometry could explain. This zone is
+               forced black in gate/.
 {extra}
 How to read it
 --------------
@@ -501,7 +506,7 @@ def run_composite(src_hi, pano_geo, rail, out_dir, wan=None, out_w=8192,
                   upscale=None, proxy_width=2048, name_prefix="", device="cuda",
                   moge_kwargs=None, params=None, log=print, progress=None,
                   depth_grid="geometry_res", prefetch=True, debug_save="off",
-                  profile=None):
+                  profile=None, semantic=None):
     """Composite one trajectory. Writes hi-res PNGs; returns proxies + a report.
 
     src_hi     : [H, W, 3] uint8 -- the ORIGINAL high-resolution panorama (8K).
@@ -512,6 +517,14 @@ def run_composite(src_hi, pano_geo, rail, out_dir, wan=None, out_w=8192,
     rail       : [T, 4, 4] world-to-camera, the Camera Plot rail.
     wan        : [T, h, w, 3] uint8 WAN frames, or None (holes are then extrapolated
                  from the source instead of filled with generated content).
+    semantic   : optional [H, W] or [H, W, 3] uint8 pano-space mask (white = region),
+                 e.g. a SAM3 'window'/'mirror' segmentation of pano_geo. It is
+                 reprojected through the SAME mesh + rail as everything else, so it
+                 lands pixel-aligned with the gate, and wherever it is set the source
+                 confidence is forced to zero -- the pano is DROPPED and WAN wins.
+                 That is the lever for glass/mirrors: the reprojected panorama only
+                 ever carries a frozen reflection, so on those surfaces WAN's moving
+                 reflection should prevail. Needs wan wired to be useful.
     depth      : optional precomputed [h, w] float32 equirect depth; else MoGe runs.
     upscale    : callable(uint8 HxWx3) -> uint8, or None (bicubic).
     debug_save : which intermediate stages of the hole fill to also write to disk, under
@@ -544,6 +557,19 @@ def run_composite(src_hi, pano_geo, rail, out_dir, wan=None, out_w=8192,
     if pano_geo.shape[1] != gw:
         pano_geo = cv2.resize(pano_geo, (gw, gh), interpolation=cv2.INTER_AREA)
     H, W = pano_geo.shape[:2]
+
+    # --- optional semantic (force-WAN) texture, on the geometry grid ----------
+    # A pano-space mask reprojected as vertex colours through the same mesh, so it
+    # aligns with the gate exactly (see the semantic force in the gate build below).
+    sem_enc = None
+    if semantic is not None:
+        s = semantic[..., 0] if semantic.ndim == 3 else semantic
+        s = cv2.resize(s, (W, H), interpolation=cv2.INTER_AREA)
+        sem_enc = np.repeat((s.astype(np.float32) / 255.0)[..., None], 3, axis=2)
+        log(f"[HiResComposite] semantic force-WAN mask wired: {float((s > 127).mean()):.1%} "
+            f"of the panorama flagged -- the pano is dropped there, WAN prevails."
+            + ("" if wan is not None else "  <-- WARNING: no wan_frames wired, so the "
+               "flagged region falls back to source extrapolation, not generated content."))
 
     # --- depth ---------------------------------------------------------------
     t_setup = time.perf_counter()
@@ -648,11 +674,15 @@ def run_composite(src_hi, pano_geo, rail, out_dir, wan=None, out_w=8192,
     # soft or discoloured region gives you no way to tell which input it came from.
     dbg = str(debug_save or "off").lower()
     LAYERS = {"wan": ["wan_raw"],
-              "all": ["source", "gate", "wan_raw", "wan_upscaled", "wan_fill"]}
+              "all": ["source", "gate", "wan_raw", "wan_upscaled", "wan_fill",
+                      "force_wan"]}
     dbg_dirs = {}
     for nm in LAYERS.get(dbg, []):
         if nm.startswith("wan") and wan is None:
             continue                             # nothing generated to dump
+        if nm == "force_wan" and sem_enc is None:
+            continue                             # no semantic mask wired
+
         dbg_dirs[nm] = os.path.join(out_dir, "debug", nm)
         os.makedirs(dbg_dirs[nm], exist_ok=True)
     if dbg_dirs:
@@ -713,11 +743,16 @@ def run_composite(src_hi, pano_geo, rail, out_dir, wan=None, out_w=8192,
         if base_mode != "geometry":
             with prof.bg("render_rgb"):
                 rgb_c, m_c = render_chunk(pano_geo.astype(np.float32) / 255.0, idxs)
+        sem_c = None
+        if sem_enc is not None:
+            with prof.bg("render_sem"):
+                sem_c, _ = render_chunk(sem_enc, idxs)
         if prof.on:
-            dt, n = time.perf_counter() - t_c, 2 if base_mode == "geometry" else 3
+            dt = time.perf_counter() - t_c
+            n = (2 if base_mode == "geometry" else 3) + (1 if sem_enc is not None else 0)
             log(f"[profile] render chunk of {len(idxs)} frames ({n} passes): {dt:.2f}s "
                 f"= {dt / max(len(idxs), 1):.2f}s/frame")
-        return rgb_c, m_c, u_c, v_c
+        return rgb_c, m_c, u_c, v_c, sem_c
 
     # The gate decides, per pixel, photo or WAN. Three ways to shape it:
     #   soft_original    -- the research project's gate, untouched: the boundary is
@@ -746,7 +781,7 @@ def run_composite(src_hi, pano_geo, rail, out_dir, wan=None, out_w=8192,
         # chunk of passes at geometry resolution is several GB, and this keeps two).
         source = (_ChunkPrefetch(render_all, chunks) if prefetch and len(chunks) > 1
                   else ((c, render_all(c)) for c in chunks))
-        for idxs, (rgb_c, m_c, u_c, v_c) in _timed_iter(prof, source):
+        for idxs, (rgb_c, m_c, u_c, v_c, sem_c) in _timed_iter(prof, source):
             for k, fi in enumerate(idxs):
                 fname = f"{name_prefix}{fi:04d}.png"
                 with prof.t("uv_decode"):
@@ -844,6 +879,25 @@ def run_composite(src_hi, pano_geo, rail, out_dir, wan=None, out_w=8192,
                         conf = m_w.clamp(0, 1) * rho_soft
                     else:
                         conf = m_w.clamp(0, 1) * keep * fb_soft * rho_soft
+                    # Semantic force-WAN: zero the source confidence inside the
+                    # reprojected mask (windows/mirrors), BEFORE the blur+threshold so
+                    # the boundary feathers through the same gate machinery as any other
+                    # edge -- no separate seam. The pano only carries a frozen reflection
+                    # there, so dropping it lets WAN's moving reflection win.
+                    if sem_c is not None:
+                        win = torch.from_numpy(
+                            np.ascontiguousarray(sem_c[k][..., 0])).to(device)
+                        win = (win > float(P["sem_thresh"])).float()
+                        # geometry mode: win already matches conf; wan mode's aligned
+                        # field can differ -- snap to conf's grid so the multiply is valid.
+                        if win.shape != conf.shape:
+                            win = torch.nn.functional.interpolate(
+                                win[None, None], size=tuple(conf.shape[-2:]),
+                                mode="nearest")[0, 0]
+                        conf = conf * (1.0 - win)
+                        if "force_wan" in dbg_dirs:
+                            writer.save(os.path.join(dbg_dirs["force_wan"], fname),
+                                        (win.cpu().numpy() * 255).astype(np.uint8))
                     conf = _blur_sigma_t(torch, cv2, conf, 6.0 * gs)
                     g = (conf > 0.55).float()
                     # The rejections are speckled: close small specks first so feathering

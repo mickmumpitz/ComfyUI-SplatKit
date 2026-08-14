@@ -195,6 +195,16 @@ class HiResComposite:
                                "frame count). Fills the disocclusions. Leave unconnected to "
                                "extrapolate the holes from the source instead -- seamless "
                                "but it invents nothing, so big disocclusions smear."}),
+                "semantic_pano": ("IMAGE", {
+                    "tooltip": "Optional pano-space mask (white = region), e.g. a SAM3 "
+                               "'window'/'mirror' segmentation of panorama_geometry. It is "
+                               "reprojected through the SAME mesh + rail as the composite, "
+                               "and wherever it lands the panorama is DROPPED so WAN "
+                               "prevails -- even though geometry could explain those pixels. "
+                               "Use it for glass: the reprojected pano only carries a frozen "
+                               "reflection there, so WAN's moving one should win. Needs "
+                               "wan_frames wired. Inspect the landed region with "
+                               "debug_save=all -> debug/force_wan/."}),
                 "upscale_model": ("UPSCALE_MODEL", {
                     "tooltip": "Optional upscaler for the WAN frames before they are "
                                "composited (Load Upscale Model -> here). 4x-UltraSharp v1 "
@@ -317,7 +327,7 @@ class HiResComposite:
             frames="all", proxy_width=2048, geom_scale=2, moge_level=6, merge_long=1440,
             depth_grid="geometry_res", moge_ckpt=_MOGE_AUTO, rho_hi=4.0, tone_work=1024,
             prefetch=True, save_video=False, debug_save="off", gate_mode="hard_soft_edge",
-            tone_mode="luma", moge_model=None):
+            tone_mode="luma", moge_model=None, semantic_pano=None):
         import time
 
         from ..core import hires_composite as hc
@@ -326,6 +336,7 @@ class HiResComposite:
         src_hi = _u8(panorama_hires)[0]
         pano_geo = _u8(panorama_geometry)[0]
         wan = _u8(wan_frames) if wan_frames is not None else None
+        sem = _u8(semantic_pano)[0] if semantic_pano is not None else None
         rail_np = hc.load_rail(rail)
 
         if src_hi.shape[1] <= pano_geo.shape[1]:
@@ -355,7 +366,7 @@ class HiResComposite:
             params=dict(geom_scale=int(geom_scale), rho_hi=float(rho_hi),
                         tone_work=int(tone_work), tone_mode=tone_mode,
                         gate_mode=gate_mode),
-            debug_save=debug_save, progress=progress)
+            debug_save=debug_save, progress=progress, semantic=sem)
         dt = time.perf_counter() - t0
 
         if save_video:
