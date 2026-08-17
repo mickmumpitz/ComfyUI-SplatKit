@@ -169,9 +169,10 @@ class HiResComposite:
                                "what the dual-res SfM node reads."}),
                 "traj_index": ("INT", {"default": 0, "min": 0, "max": 31,
                     "tooltip": "Which trajectory this is (0, 1, 2, ...). Only used to name "
-                               "the files so sorted order = concatenation order. Give each "
-                               "Camera Plot branch a different one; re-running the same "
-                               "index replaces just that trajectory's frames."}),
+                               "the files (traj<NN>_frame_*.png). Give each Camera Plot branch "
+                               "a different one; re-running the same index replaces just that "
+                               "trajectory's frames. IGNORED when auto_name is on -- then a "
+                               "unique prefix is derived from the node id instead."}),
                 "output_width": ("INT", {"default": 8192, "min": 1024, "max": 16384, "step": 256,
                     "tooltip": "Composite width. Set it to the SOURCE panorama's width: at "
                                "8192 one output pixel covers one source pixel, so the 8K is "
@@ -311,11 +312,22 @@ class HiResComposite:
                     "tooltip": "Optional pre-loaded MoGe model (MoGe Model Loader). Note "
                                "depth is cached on the panorama + params anyway, so wiring "
                                "the same one Camera Plot used mainly saves a reload."}),
+                # Keep new widgets LAST: ComfyUI maps widgets_values positionally, so a widget
+                # inserted above here would shift every saved value in older graphs.
+                "auto_name": ("BOOLEAN", {"default": False,
+                    "tooltip": "ON: name this trajectory's files by the node's own id "
+                               "(auto<id>_frame_*.png) instead of traj_index -- so duplicated "
+                               "path branches can never collide in the shared frames/ folder "
+                               "and you never set an index by hand. The SphereSfM nodes read "
+                               "the hires_manifest, so the name itself is irrelevant to them. "
+                               "OFF (default): use traj_index, exactly as before."}),
             },
+            "hidden": {"unique_id": "UNIQUE_ID"},
         }
 
-    RETURN_TYPES = ("STRING", "IMAGE", "IMAGE", "STRING", "STRING")
-    RETURN_NAMES = ("hires_dir", "proxy_frames", "gate_masks", "report", "proxy_dir")
+    RETURN_TYPES = ("STRING", "IMAGE", "IMAGE", "STRING", "STRING", "STRING")
+    RETURN_NAMES = ("hires_dir", "proxy_frames", "gate_masks", "report", "proxy_dir",
+                    "hires_manifest")
     FUNCTION = "run"
     OUTPUT_NODE = True        # terminal-ish: it writes the composite frames to disk
     CATEGORY = "SplatKit"
@@ -325,10 +337,22 @@ class HiResComposite:
             frames="all", proxy_width=2048, geom_scale=2, moge_level=6, merge_long=1440,
             depth_grid="geometry_res", moge_ckpt=_MOGE_AUTO, rho_hi=4.0, tone_work=1024,
             prefetch=True, save_video=False, debug_save="off", gate_mode="hard_soft_edge",
-            tone_mode="luma", moge_model=None, semantic_pano=None):
+            tone_mode="luma", moge_model=None, semantic_pano=None,
+            auto_name=False, unique_id=None):
+        import glob as _glob
+        import json as _json
         import time
 
         from ..core import hires_composite as hc
+
+        # File-prefix stem for THIS trajectory. auto_name derives a unique one from the node
+        # id so duplicated path branches can't clobber each other in the shared frames/ folder
+        # (the SphereSfM nodes read the manifest, so the name is only about on-disk uniqueness).
+        if auto_name and unique_id not in (None, ""):
+            prefix_stem = f"auto{str(unique_id).replace(':', '_')}_"
+        else:
+            prefix_stem = f"traj{int(traj_index):02d}_"
+        name_prefix = prefix_stem + "frame_"
 
         dev = str(comfy.model_management.get_torch_device())
         # One panorama, both roles: the full-res image is the detail source, and the
@@ -362,7 +386,7 @@ class HiResComposite:
             src_hi, pano_geo, rail_np, out_dir, wan=wan,
             out_w=int(output_width), base_mode=base_mode, frames_spec=frames,
             upscale=_upscaler(upscale_model), proxy_width=int(proxy_width),
-            name_prefix=f"traj{int(traj_index):02d}_frame_", device=dev,
+            name_prefix=name_prefix, device=dev,
             moge_kwargs=moge_kwargs, depth_grid=depth_grid, prefetch=bool(prefetch),
             params=dict(geom_scale=int(geom_scale), rho_hi=float(rho_hi),
                         tone_work=int(tone_work), tone_mode=tone_mode,
@@ -372,8 +396,7 @@ class HiResComposite:
 
         if save_video:
             self._write_video(res["frames_dir"], out_dir,
-                              f"composite_traj{int(traj_index):02d}.mp4",
-                              f"traj{int(traj_index):02d}_frame_")
+                              f"composite_{prefix_stem.rstrip('_')}.mp4", name_prefix)
 
         report = (
             f"{res['num_frames']}/{res['frames_total']} frames at {int(output_width)}x"
@@ -385,13 +408,24 @@ class HiResComposite:
             f"proxies-> {res['proxy_dir']}"
             + "".join(f"\n{k:<7}-> {v}" for k, v in res.get("debug_dirs", {}).items()))
         print("[HiResComposite] " + report.replace("\n", "\n[HiResComposite] "))
-        print("[HiResComposite] next: run 4b_hires_composite_to_dataset -- load the "
-              "proxies/ folder, point hires_dir at frames/ -- then train with "
-              "--max-cap 3000000 -r 1 --max-width 4096.")
+        print("[HiResComposite] next: wire hires_manifest + proxy_frames into the SphereSfM "
+              "(Dual-Res) node's hires_1 + pano_frames_1 -- no typed hires_glob needed. "
+              "Then train with --max-cap 3000000 -r 1 --max-width 4096.")
+
+        # Self-describing handle for the SphereSfM nodes: THIS trajectory's own files, in
+        # the same order as proxy_frames. Wiring it removes the typed hires_glob (and the
+        # 'sorted order == concat order' trap) since the paths are already explicit here.
+        this_glob = prefix_stem + "*.png"
+        hires_files = sorted(_glob.glob(os.path.join(res["frames_dir"], this_glob)))
+        hires_manifest = _json.dumps({
+            "dir": res["frames_dir"], "glob": this_glob,
+            "count": len(hires_files), "paths": hires_files,
+        })
 
         proxy = torch.from_numpy(res["proxies"].astype(np.float32) / 255.0)
         gate = torch.from_numpy(res["gates"].astype(np.float32) / 255.0)[..., None]
-        return (res["frames_dir"], proxy, gate.repeat(1, 1, 1, 3), report, res["proxy_dir"])
+        return (res["frames_dir"], proxy, gate.repeat(1, 1, 1, 3), report, res["proxy_dir"],
+                hires_manifest)
 
     @staticmethod
     def _write_video(frames_dir, out_dir, name, prefix, fps=16):

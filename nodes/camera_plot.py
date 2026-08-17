@@ -313,10 +313,17 @@ class CameraPlotRenderControlGeo:
                 "length": ("INT", {"default": 81, "min": 9, "max": 257, "step": 4,
                     "tooltip": "Number of frames. MUST match the Wan Conditioning length (81)."}),
                 "output_name": ("STRING", {"default": "comfy_camplot"}),
-                # Point-map (overlay cloud) setting.
-                "point_budget": ("INT", {"default": 4000, "min": 500, "max": 40000, "step": 500,
-                    "tooltip": "Max points in the geometry overlay cloud. Higher = denser backdrop but "
-                               "heavier canvas; 4000 is plenty for placement."}),
+                # Geometry detail. This REPLACES the old point_budget widget IN PLACE (same
+                # slot, same INT type) so saved graphs don't shift positionally -- the old
+                # point_budget value (always 500-40000) migrates into this slot and, being
+                # out of the 0-9 range, is snapped back to the default 6 in render().
+                "moge_level": ("INT", {"default": 6, "min": 0, "max": 9, "step": 1,
+                    "tooltip": "Geometry detail: the MoGe depth inference resolution level (0-9). "
+                               "Higher = sharper depth edges / thin structures but slower (~2x "
+                               "cost from 0 to 9); lower = faster, softer geometry. 6 is a balanced "
+                               "default -- drop to 3-4 for quick anchor placement, raise to 9 for a "
+                               "final sharp mesh. Output resolution is unaffected; this only sets how "
+                               "much detail the depth network sees per panorama sub-view."}),
             },
             "optional": {
                 "dataset_dir": ("STRING", {"default": "",
@@ -344,8 +351,19 @@ class CameraPlotRenderControlGeo:
     CATEGORY = "SplatKit"
 
     def render(self, panorama, anchors, orientation, length,
-               output_name="comfy_camplot", point_budget=4000,
-               dataset_dir="", moge_ckpt=_MOGE_AUTO, moge_model=None, unique_id=None):
+               output_name="comfy_camplot", moge_level=6,
+               dataset_dir="", moge_ckpt=_MOGE_AUTO, moge_model=None, unique_id=None,
+               point_budget=None):
+        # moge_level occupies the slot the removed point_budget widget used. A graph saved
+        # before this change still carries its old point_budget value (500-40000) here, and
+        # anything outside 0-9 is that migrated value, not a real level -> snap to default 6.
+        # (point_budget is still accepted, and ignored, so old API prompts don't error.)
+        try:
+            moge_level = int(moge_level)
+        except (TypeError, ValueError):
+            moge_level = 6
+        if not (0 <= moge_level <= 9):
+            moge_level = 6
         # WYSIWYG: anchors are literal scene coordinates at unit gain, so the rendered
         # path tracks the editor overlay exactly. Not user-settable -- see the docstring.
         scale_mode, movement_scale = "absolute_literal", 1.0
@@ -428,7 +446,7 @@ class CameraPlotRenderControlGeo:
         res = mp.render_control(
             pano, movement_mode="straight", movement_range=float(movement_scale), angle=0.0,
             frame_size=int(length), json_path=rail_json, scale_mode=scale_mode,
-            moge_ckpt=ckpt, model=model, device=dev)
+            moge_ckpt=ckpt, model=model, device=dev, moge_level=moge_level)
         _tB = _time.perf_counter()
 
         # --- persist condition/ for Wan Conditioning + SphereSfM -------------
@@ -479,8 +497,11 @@ class CameraPlotRenderControlGeo:
         # let a cloud failure break the render the user actually queued). The editor
         # can also trigger this on demand via POST /splatkit/compute_scene_points.
         try:
+            # Overlay density is fixed (4000 is plenty for placement, and the dense ortho
+            # backdrop is what the editor actually draws anyway). Pass moge_level so the
+            # cloud is built at the SAME depth detail as the mesh above -> one shared MoGe.
             count, path = _write_scene_reference(
-                panorama, "default", int(point_budget), moge_ckpt, moge_model)
+                panorama, "default", 4000, moge_ckpt, moge_model, moge_level=moge_level)
             print(f"[CameraPlotGeo] scene-ref cloud: {count} pts -> {path}")
         except Exception as e:
             print(f"[CameraPlotGeo] scene-ref cloud skipped ({e})")
@@ -710,11 +731,19 @@ def _equirect_to_ortho_views(depth, mask, pano_rgb, cap=2_500_000, res_max=None)
     return out or None
 
 
-def _write_scene_reference(panorama, ref_name, point_budget, moge_ckpt, moge_model=None):
+def _write_scene_reference(panorama, ref_name, point_budget, moge_ckpt, moge_model=None,
+                           moge_level=None):
     """Compute the MoGe depth cloud for ``panorama`` and cache it for the editor.
 
     Shared by the standalone Scene Reference node and the geometry-aware Camera Plot
     node so they produce an identical, anchor-aligned cloud. Returns (count, path).
+
+    ``moge_level`` (0-9) sets the depth inference detail; the geometry-aware Camera Plot
+    node passes ITS moge_level widget so the overlay you plot the camera against is built
+    at the SAME detail as the control-video mesh -- and, since the merge size matches too,
+    they share one cached MoGe pass instead of estimating depth twice. None -> the
+    P2S_SCENE_REF_MOGE_LEVEL env default (6). Folded into the on-disk cache signature so
+    changing the level rebuilds the overlay.
     """
     import os
     import json
@@ -733,6 +762,12 @@ def _write_scene_reference(panorama, ref_name, point_budget, moge_ckpt, moge_mod
     path = os.path.join(_scene_ref_dir(), f"{name}.json")
     pano_hash = hashlib.blake2b(np.ascontiguousarray(pano).tobytes(),
                                 digest_size=16).hexdigest()
+
+    # Depth detail: the caller's moge_level (the Camera Plot node's widget) wins so the
+    # overlay matches the control-video mesh; else the env default. Clamped to 0-9.
+    _ref_level = moge_level if moge_level is not None else \
+        int(os.environ.get("P2S_SCENE_REF_MOGE_LEVEL", "6"))
+    _ref_level = max(0, min(9, int(_ref_level)))
 
     # The scene-ref cloud is a STATIC editor backdrop -- identical for the same
     # panorama -- yet rebuilding it runs a full ~30s MoGe pass. Once the map has it
@@ -755,6 +790,7 @@ def _write_scene_reference(panorama, ref_name, point_budget, moge_ckpt, moge_mod
             if (existing.get("pano_hash") == pano_hash
                     and int(existing.get("budget", -1)) == int(point_budget)
                     and existing.get("ov_sig") == ov_sig
+                    and int(existing.get("moge_level", -1)) == int(_ref_level)
                     and has_views):
                 print("[P2S] scene-ref cloud unchanged (same panorama) -- reusing "
                       "cached cloud, skipping MoGe", flush=True)
@@ -763,7 +799,16 @@ def _write_scene_reference(panorama, ref_name, point_budget, moge_ckpt, moge_mod
             pass  # corrupt/old cloud -> fall through and rebuild
 
     model, ckpt = _moge_for_node(moge_ckpt, moge_model)
-    depth, mask = mp.moge_panorama_depth(pano, model=model, ckpt=ckpt, device=dev)
+    # The overlay cloud is a placement backdrop only (downsampled to point_budget pts +
+    # low-res ortho views), so it does NOT need MoGe's max-quality depth. Running the
+    # default (resolution_level=None -> model max, merge 1920x960) here is the ~56s path.
+    # Use _ref_level with render_control's merge size (1440x720) instead -- that both makes
+    # the pass ~3x cheaper AND, because the params now equal what render_control used, this
+    # is a hit on the shared depth cache (_depth_cache_key): when a render already ran on
+    # this pano the MoGe pass is skipped entirely rather than repeated at different params.
+    depth, mask = mp.moge_panorama_depth(pano, model=model, ckpt=ckpt, device=dev,
+                                         resolution_level=_ref_level,
+                                         merge_long=1440, merge_short=720)
     pts, cols = _equirect_to_cloud(depth, mask, pano, point_budget)
 
     out = {
@@ -772,6 +817,7 @@ def _write_scene_reference(panorama, ref_name, point_budget, moge_ckpt, moge_mod
         "pano_hash": pano_hash,
         "budget": int(point_budget),
         "ov_sig": ov_sig,
+        "moge_level": int(_ref_level),
         # round to keep the JSON small; editor only needs placement accuracy
         "points": np.round(pts, 3).tolist(),
         "colors": cols.tolist(),
@@ -821,7 +867,11 @@ class CameraPlotSceneReference:
     RETURN_TYPES = ("IMAGE", "STRING")
     RETURN_NAMES = ("panorama", "status")
     FUNCTION = "build"
-    CATEGORY = "SplatKit"
+    # Tucked into an 'internal' submenu: this is not a node you place by hand anymore --
+    # Plot Camera computes its own geometry, and the editor's Compute Geometry button
+    # queues this class transiently. Kept registered (the button needs a real node) but
+    # out of the main SplatKit menu so it stops reading as a separate feature.
+    CATEGORY = "SplatKit/internal"
     OUTPUT_NODE = True       # terminal: must run on queue even with outputs unconnected
 
     def build(self, panorama, ref_name="default", point_budget=4000,
@@ -887,6 +937,7 @@ NODE_CLASS_MAPPINGS = {
     "SplatKit_CameraPlotSceneReference": CameraPlotSceneReference,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "SplatKit_CameraPlotRenderControlGeo": "Camera Plot Fly-Through (Geometry)",
-    "SplatKit_CameraPlotSceneReference": "Camera Plot Scene Reference",
+    "SplatKit_CameraPlotRenderControlGeo": "Plot Camera",
+    # Internal helper for Plot Camera's Compute Geometry button (see CATEGORY note above).
+    "SplatKit_CameraPlotSceneReference": "Plot Camera - Compute Geometry (internal)",
 }

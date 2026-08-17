@@ -1544,6 +1544,36 @@ class SaveUpscaledFramesStreaming:
         return (target,)
 
 
+def _parse_hires_manifest(s):
+    """A HiRes Composite ``hires_manifest`` wire -> ``(paths, dir)`` for THAT trajectory.
+
+    ``paths`` is the sorted absolute file list the composite just wrote (already in
+    ``proxy_frames`` order); ``dir`` is their folder. Returns ``([], "")`` for None /
+    empty / non-manifest text so callers can treat 'nothing wired' and 'wired but empty'
+    the same and fall back to the legacy hires_dir + hires_glob path.
+    """
+    import json as _json
+    s = (s or "").strip()
+    if not s:
+        return [], ""
+    try:
+        obj = _json.loads(s)
+    except Exception:
+        # A bare folder / glob string is not a manifest -- let the caller fall back.
+        return [], ""
+    if isinstance(obj, dict):
+        paths = obj.get("paths") or []
+        hdir = str(obj.get("dir") or "")
+    elif isinstance(obj, list):
+        paths, hdir = obj, ""
+    else:
+        return [], ""
+    paths = [str(p) for p in paths]
+    if not hdir and paths:
+        hdir = os.path.dirname(paths[0])
+    return paths, hdir
+
+
 class SphereSfMDatasetDualRes:
     """Build a SphereSfM COLMAP dataset from a folder of panoramas -- single-res, or with
     SfM at LOW resolution and the trainable pinhole cube faces reprojected from
@@ -1627,6 +1657,18 @@ class SphereSfMDatasetDualRes:
                 "max_frames": ("INT", {"default": 0, "min": 0, "max": 2000, "step": 1,
                     "tooltip": "Cap the frame count after striding (0 = no cap). Frames are "
                                "picked evenly across the strided clip."}),
+                # Wire-only (forceInput -> no widget, no widgets_values drift). A HiRes
+                # Composite's hires_manifest carries that trajectory's exact 8K file list,
+                # replacing hires_dir + hires_glob. Wire one per trajectory.
+                "hires_1": ("STRING", {"forceInput": True,
+                    "tooltip": "hires_manifest from the HiRes Composite feeding pano_frames_1. "
+                               "Wire it and hires_dir/hires_glob are ignored (dual-res on)."}),
+                "hires_2": ("STRING", {"forceInput": True,
+                    "tooltip": "hires_manifest for pano_frames_2."}),
+                "hires_3": ("STRING", {"forceInput": True,
+                    "tooltip": "hires_manifest for pano_frames_3."}),
+                "hires_4": ("STRING", {"forceInput": True,
+                    "tooltip": "hires_manifest for pano_frames_4."}),
             },
         }
 
@@ -1643,22 +1685,33 @@ class SphereSfMDatasetDualRes:
             max_num_matches=32768, filter_max_reproj_error=4.0, filter_min_tri_angle=1.5,
             init_min_tri_angle=4.0, init_min_num_inliers=30, init_max_forward_motion=1.0,
             image_order="camera_major", hires_glob="*.png",
-            frame_stride=1, max_frames=0):
+            frame_stride=1, max_frames=0,
+            hires_1=None, hires_2=None, hires_3=None, hires_4=None):
         import glob
         import numpy as np
         import torch
         from ..core import spheresfm_colmap as ss
 
-        # hires_dir empty = single-res: the posed frames themselves are reprojected.
+        # Slot-aligned so each trajectory's 8K files (via its hires_N manifest) stay paired
+        # with its own proxy_frames.
+        panos = (pano_frames_1, pano_frames_2, pano_frames_3, pano_frames_4)
+        manifs = (hires_1, hires_2, hires_3, hires_4)
+        wired = [(i, b, m) for i, (b, m) in enumerate(zip(panos, manifs)) if b is not None]
+        manifest_lists = [_parse_hires_manifest(m) for _, _, m in wired]
+        use_manifest = any(paths for paths, _ in manifest_lists)
+
+        # hires_dir empty AND no manifest = single-res: the posed frames are reprojected.
         hires_dir = (hires_dir or "").strip().strip('"')
-        dual = bool(hires_dir)
-        if dual and not os.path.isdir(hires_dir):
+        if use_manifest:
+            # The scene's trajectories share one frames/ folder; take it from the manifest.
+            hires_dir = next(d for paths, d in manifest_lists if paths and d)
+        dual = bool(hires_dir) or use_manifest
+        if dual and hires_dir and not os.path.isdir(hires_dir):
             raise RuntimeError(f"[DualResSfM] hires_dir not found: {hires_dir!r} -- point it at "
                                "the hi-res equirect folder (e.g. <dataset>/panoramas_upscaled), "
                                "or clear it for a single-res SphereSfM run.")
 
-        batches = [b for b in (pano_frames_1, pano_frames_2, pano_frames_3, pano_frames_4)
-                   if b is not None]
+        batches = [b for _, b, _ in wired]
         # A BYPASSED upstream node (ctrl+B) forwards its own IMAGE input straight to its
         # output, so an unused trajectory slot silently carries e.g. the 8K source panorama
         # instead of that trajectory's proxies. Catch the size clash here rather than in
@@ -1697,7 +1750,26 @@ class SphereSfMDatasetDualRes:
         trajectory_lengths = [sum(1 for t in traj_of if t == bi) for bi in range(len(batches))]
 
         hires_paths = None
-        if dual:
+        if use_manifest:
+            # Preferred: each trajectory's files arrive over its own hires_N wire, ordered
+            # and scoped to that trajectory -- no glob, no shared-folder contamination.
+            missing = [f"pano_frames_{i + 1}" for (i, _, _), (paths, _)
+                       in zip(wired, manifest_lists) if not paths]
+            if missing:
+                raise RuntimeError(
+                    "[DualResSfM] a hires_manifest is wired for some trajectories but not "
+                    f"{', '.join(missing)}. Wire each HiRes Composite's hires_manifest to the "
+                    "hires_N input beside its proxy_frames, or wire none.")
+            for (i, b, _), (paths, _) in zip(wired, manifest_lists):
+                if len(paths) != int(b.shape[0]):
+                    raise RuntimeError(
+                        f"[DualResSfM] pano_frames_{i + 1}: {int(b.shape[0])} frame(s) wired "
+                        f"vs {len(paths)} file(s) in its hires_manifest. They must be the SAME "
+                        "set 1:1 -- re-run that HiRes Composite so proxy_frames and "
+                        "hires_manifest come from the same pass.")
+            hires_paths = [p for paths, _ in manifest_lists for p in paths]
+            hires_paths = [hires_paths[i] for i in idx]
+        elif dual:
             hires_paths = sorted(glob.glob(os.path.join(hires_dir, hires_glob)))
             if not hires_paths:
                 raise RuntimeError(f"[DualResSfM] no hi-res frames matched {hires_glob!r} "
@@ -1708,7 +1780,8 @@ class SphereSfMDatasetDualRes:
                     f"{len(hires_paths)} file(s) matching {hires_glob!r} in {hires_dir}. Both "
                     "sides must be the SAME set in the SAME order BEFORE striding -- set the "
                     "image loader's select_every_nth back to 1 and thin with this node's "
-                    "frame_stride instead (it strides the hi-res files too).")
+                    "frame_stride instead (it strides the hi-res files too). Or wire the HiRes "
+                    "Composite's hires_manifest into hires_1 to skip the glob entirely.")
             hires_paths = [hires_paths[i] for i in idx]
         if len(idx) < n_all:
             lowres = lowres[idx]
@@ -1751,21 +1824,21 @@ class SphereSfMAddToDatasetDualRes:
     from the small proxies and the faces are reprojected from the 8K composites on disk.
     Pointed at a dual-res dataset it simply cannot find the scratch folder it expects.
 
-    This node takes both halves, exactly like the dual-res build node:
+    Wiring is just the HiRes Composite's two matching outputs -- one pair per new path:
 
-        HiRes Composite (traj_index=4) ──> hires_dir  ──┐
-                                      └──> proxy_frames ─┴──> this node ──> dataset grows
+        HiRes Composite ──> hires_manifest ──> hires_1        ┐
+                       └──> proxy_frames   ──> pano_frames_1 ─┴─> this node ──> dataset grows
 
     WIRING (the add section at the bottom of workflow 1)
       * ``dataset_dir`` -- the Dataset Project node's dataset_dir, i.e. the same dataset
         the dual-res build node wrote.
-      * ``pano_frames_1`` -- the new trajectory's ``proxy_frames``. Must be the SAME
+      * ``pano_frames_N`` -- the new trajectory's ``proxy_frames``. Must be the SAME
         resolution as the proxies the base build was posed on (same proxy_width).
-      * ``hires_dir`` + ``hires_glob`` -- the new trajectory's 8K composites. Every
-        HiRes Composite of one scene writes into ONE folder, named
-        ``traj<NN>_frame_*.png``, so the glob MUST select only the new trajectory:
-        ``traj04_*.png`` for traj_index=4. A bare ``*.png`` picks up the trajectories
-        already in the dataset and the count check will stop you.
+      * ``hires_N`` -- the SAME HiRes Composite's ``hires_manifest`` (pair it with the
+        matching ``pano_frames_N``). It carries that trajectory's exact 8K file list, so
+        nothing is typed and it cannot pick up the trajectories already in the dataset.
+        Add several paths at once by wiring each composite into its own
+        (``pano_frames_N``, ``hires_N``) pair.
 
     Everything else matches the single-res add node: the existing cameras stay FIXED by
     default (purely additive), the new path has to SHARE VIEW with the existing scene for
@@ -1785,20 +1858,20 @@ class SphereSfMAddToDatasetDualRes:
                     "tooltip": "The NEW trajectory's proxy_frames from its HiRes Composite. "
                                "Must be the same resolution as the proxies the base dataset "
                                "was posed on."}),
-                "hires_dir": ("STRING", {"default": "",
-                    "tooltip": "The HiRes Composite's hires_dir output -- the folder holding "
-                               "the 8K composites. Shared by every trajectory of the scene, so "
-                               "narrow it to the new one with hires_glob."}),
+                "hires_1": ("STRING", {"forceInput": True,
+                    "tooltip": "hires_manifest from the SAME HiRes Composite feeding "
+                               "pano_frames_1 -- that trajectory's exact 8K file list."}),
             },
             "optional": {
                 "pano_frames_2": ("IMAGE", {"tooltip": "Optional second new trajectory; concatenated after pano_frames_1."}),
                 "pano_frames_3": ("IMAGE", {"tooltip": "Optional third new trajectory."}),
                 "pano_frames_4": ("IMAGE", {"tooltip": "Optional fourth new trajectory."}),
-                "hires_glob": ("STRING", {"default": "traj04_*.png",
-                    "tooltip": "Glob selecting ONLY the new trajectory's files inside "
-                               "hires_dir. HiRes Composite names them traj<NN>_frame_*.png, so "
-                               "traj04_*.png is trajectory index 4. Its sorted order and COUNT "
-                               "must match the frames wired in above, 1:1, BEFORE striding."}),
+                "hires_2": ("STRING", {"forceInput": True,
+                    "tooltip": "hires_manifest for pano_frames_2."}),
+                "hires_3": ("STRING", {"forceInput": True,
+                    "tooltip": "hires_manifest for pano_frames_3."}),
+                "hires_4": ("STRING", {"forceInput": True,
+                    "tooltip": "hires_manifest for pano_frames_4."}),
                 "frame_stride": ("INT", {"default": 1, "min": 1, "max": 100, "step": 1,
                     "tooltip": "Use every Nth new frame. Stride HERE, not in a loader: this "
                                "thins the proxies and the matching 8K files together."}),
@@ -1835,16 +1908,14 @@ class SphereSfMAddToDatasetDualRes:
     OUTPUT_NODE = True       # terminal: updates the COLMAP dataset on disk
     CATEGORY = "SplatKit"
 
-    def run(self, dataset_dir="", pano_frames_1=None, hires_dir="",
+    def run(self, dataset_dir="", pano_frames_1=None,
             pano_frames_2=None, pano_frames_3=None, pano_frames_4=None,
-            hires_glob="traj04_*.png", frame_stride=1, max_frames=0,
+            frame_stride=1, max_frames=0,
             matcher_type="exhaustive", adjust_existing_cameras=False, retriangulate=True,
             face_size=0, max_num_features=8192, peak_threshold=0.0066,
             edge_threshold=10.0, max_num_matches=32768, abs_pose_min_num_inliers=30,
-            image_order="camera_major"):
-        import glob as _glob
-        import re as _re
-
+            image_order="camera_major",
+            hires_1=None, hires_2=None, hires_3=None, hires_4=None):
         import numpy as np
 
         from ..core import spheresfm_colmap as ss
@@ -1858,22 +1929,16 @@ class SphereSfMAddToDatasetDualRes:
             raise RuntimeError(f"[DualResAdd] dataset folder does not exist:\n  {ds_dir}\n"
                                "Build it first with the 'SphereSfM Dataset (Dual-Res)' node.")
 
-        hires_dir = (hires_dir or "").strip().strip('"')
-        if not hires_dir:
-            raise RuntimeError("[DualResAdd] hires_dir is empty -- wire the new HiRes "
-                               "Composite's hires_dir output. (For a SINGLE-res dataset use "
-                               "the plain 'SphereSfM Add Camera Path to Dataset' node "
-                               "instead; this one exists for the 8K reprojection source.)")
-        if not os.path.isdir(hires_dir):
-            raise RuntimeError(f"[DualResAdd] hires_dir not found: {hires_dir!r}")
-
-        # Same trap as the dual-res build node: a BYPASSED (ctrl+B) upstream node forwards
-        # its own IMAGE input, so an unused slot silently carries the source panorama.
-        batches = [b for b in (pano_frames_1, pano_frames_2, pano_frames_3, pano_frames_4)
-                   if b is not None]
-        if not batches:
+        # Slot-aligned so each trajectory's 8K files travel with its own proxy_frames.
+        # A BYPASSED (ctrl+B) upstream node forwards its own IMAGE input, so an unused slot
+        # silently carries the source panorama -- caught by the size check below.
+        panos = (pano_frames_1, pano_frames_2, pano_frames_3, pano_frames_4)
+        manifs = (hires_1, hires_2, hires_3, hires_4)
+        wired = [(i, b, m) for i, (b, m) in enumerate(zip(panos, manifs)) if b is not None]
+        if not wired:
             raise RuntimeError("[DualResAdd] no frames connected -- wire the new HiRes "
                                "Composite's proxy_frames into pano_frames_1.")
+        batches = [b for _, b, _ in wired]
         shapes = [tuple(int(x) for x in b.shape[1:3]) for b in batches]
         if len(set(shapes)) > 1:
             listing = ", ".join(f"pano_frames_{i + 1}={s[1]}x{s[0]}"
@@ -1898,24 +1963,24 @@ class SphereSfMAddToDatasetDualRes:
                                f"frame_stride={frame_stride} / max_frames={max_frames}; "
                                "at least 2 are needed to add a path.")
 
-        hires_paths = sorted(_glob.glob(os.path.join(hires_dir, hires_glob)))
-        if len(hires_paths) != n_all:
-            # The scene's trajectories share one frames/ folder, so the usual cause is a
-            # glob that also matched the trajectories already in the dataset. Name the
-            # per-trajectory prefixes actually present rather than making them look.
-            groups = {}
-            for p in _glob.glob(os.path.join(hires_dir, "*.png")):
-                m = _re.match(r"(traj\d+)_", os.path.basename(p))
-                if m:
-                    groups[m.group(1)] = groups.get(m.group(1), 0) + 1
-            hint = ("\n  Trajectories present in that folder: "
-                    + ", ".join(f"{k}_*.png ({v} frames)" for k, v in sorted(groups.items()))
-                    + "\n  Set hires_glob to the NEW trajectory's prefix only."
-                    ) if groups else ""
+        # Each trajectory's 8K files arrive over its own hires_N wire, already ordered and
+        # scoped to that trajectory -- no glob, no shared-folder contamination.
+        manifest_lists = [_parse_hires_manifest(m)[0] for _, _, m in wired]
+        missing = [f"pano_frames_{i + 1}" for (i, _, _), lst
+                   in zip(wired, manifest_lists) if not lst]
+        if missing:
             raise RuntimeError(
-                f"[DualResAdd] count mismatch: {n_all} frame(s) wired in vs "
-                f"{len(hires_paths)} file(s) matching {hires_glob!r} in {hires_dir}. Both "
-                "sides must be the SAME set in the SAME order BEFORE striding." + hint)
+                "[DualResAdd] no hires_manifest wired for " + ", ".join(missing) + ". Wire "
+                "each HiRes Composite's hires_manifest output into the hires_N input beside "
+                "its proxy_frames (pano_frames_1 <-> hires_1, etc.).")
+        for (i, b, _), lst in zip(wired, manifest_lists):
+            if len(lst) != int(b.shape[0]):
+                raise RuntimeError(
+                    f"[DualResAdd] pano_frames_{i + 1}: {int(b.shape[0])} frame(s) wired "
+                    f"vs {len(lst)} file(s) in its hires_manifest. They must be the SAME "
+                    "set 1:1 -- re-run that HiRes Composite so proxy_frames and "
+                    "hires_manifest come from the same pass.")
+        hires_paths = [p for lst in manifest_lists for p in lst]
         hires_paths = [hires_paths[i] for i in idx]
 
         # Per-trajectory counts AFTER striding, so the marker splits the sub-videos right.
