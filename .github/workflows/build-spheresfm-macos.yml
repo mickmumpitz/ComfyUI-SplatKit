@@ -39,20 +39,22 @@ jobs:
       - name: Build Eigen 3.4 (pinned -- newer Eigen breaks COLMAP 3.8)
         run: |
           git clone --depth 1 --branch 3.4.0 https://gitlab.com/libeigen/eigen.git eigen
-          cmake -S eigen -B eigen/build -DCMAKE_INSTALL_PREFIX="$HOME/deps"
-          cmake --build eigen/build --target install
+          cmake -S eigen -B eigen-build -DCMAKE_INSTALL_PREFIX="$HOME/deps"
+          cmake --build eigen-build --target install
 
       - name: Build Ceres 2.1.0 against the pinned Eigen
         run: |
           git clone --depth 1 --branch 2.1.0 https://github.com/ceres-solver/ceres-solver.git ceres
-          cmake -S ceres -B ceres/build -G Ninja \
+          # NOTE: build dir must live OUTSIDE the ceres checkout -- the repo has a file
+          # named BUILD, which collides with a build/ dir on macOS's case-insensitive disk.
+          cmake -S ceres -B ceres-build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_PREFIX_PATH="$HOME/deps;$(brew --prefix)" \
             -DCMAKE_INSTALL_PREFIX="$HOME/deps" \
             -DBUILD_TESTING=OFF -DBUILD_EXAMPLES=OFF \
             -DSUITESPARSE=OFF -DCXSPARSE=OFF -DEIGENSPARSE=ON
-          cmake --build ceres/build -j"$(sysctl -n hw.ncpu)"
-          cmake --build ceres/build --target install
+          cmake --build ceres-build -j"$(sysctl -n hw.ncpu)"
+          cmake --build ceres-build --target install
 
       - name: Fetch SphereSfM + apply the headless-SIFT patch
         run: |
