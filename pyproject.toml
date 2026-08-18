@@ -1,6 +1,6 @@
 [project]
 name = "comfyui-splatkit"
-version = "1.0.0"
+version = "1.1.0"
 description = "Build 3D Gaussian Splat training datasets from a single 360 panorama, inside ComfyUI. Pano -> MoGe depth -> WAN camera-motion video -> COLMAP dataset for LichtFeld / gsplat / 3DGRUT."
 license = { file = "LICENSE" }
 requires-python = ">=3.10"

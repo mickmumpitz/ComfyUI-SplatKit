@@ -40,11 +40,13 @@ python_embeded\python.exe -m pip install -r ComfyUI-SplatKit/requirements.txt
 ComfyUI. Three things download on first use:
 
 - the **MoGe** checkpoint → `ComfyUI/models/MoGe`
-- the **SphereSfM** binary (`colmap_sphere.exe`, ~37 MB, SHA-256 verified) → `bin/`. A CUDA
-  static-linked build of [SphereSfM](https://github.com/json87/SphereSfM), so there's no CUDA
-  toolkit to install — see [docs/SPHERESFM.md](docs/SPHERESFM.md). **Windows + NVIDIA (Turing
-  or newer) only**; on Linux/macOS the SphereSfM nodes won't run, the rest of the pack is
-  platform-independent.
+- the **SphereSfM** binary (`colmap_sphere`, SHA-256 verified) → `bin/`. A CUDA build of
+  [SphereSfM](https://github.com/json87/SphereSfM) with everything it needs included, so
+  there's no CUDA toolkit to install — see [docs/SPHERESFM.md](docs/SPHERESFM.md). The right
+  build for your platform is picked automatically: **Windows** and **Linux** (NVIDIA Turing
+  or newer for GPU feature matching; without an NVIDIA card it falls back to the CPU —
+  slower, same result). A **macOS** build is planned; until then the SphereSfM nodes need a
+  self-built binary there (`COLMAP_SPHERE_EXE`), the rest of the pack is platform-independent.
 - the **RAFT** optical-flow weights, the first time HiRes Composite runs with `base_mode=wan`.
 
 **You supply:** a WAN 2.1 i2v checkpoint, and the Matrix-3D pano LoRA converted to ComfyUI's key

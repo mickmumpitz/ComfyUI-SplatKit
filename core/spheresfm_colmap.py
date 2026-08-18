@@ -116,21 +116,58 @@ def write_panorama_dataset(frames, out_dir, sfm_params=None):
     return {"pano_dir": pano_dir, "num_frames": int(len(frames))}
 
 
-# Pack-local bundle location: the SphereSfM CUDA binary lives here. It's auto-downloaded
+# Pack-local bundle location: the SphereSfM binary lives here. It's auto-downloaded
 # on first use (see below) and git-ignored, so it never bloats the repo.
 _PACK_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # core/ -> pack root
 _BIN_DIR = os.path.join(_PACK_DIR, "bin")
-_PACK_BIN = os.path.join(_BIN_DIR, "colmap_sphere.exe")
+_IS_WIN = sys.platform == "win32"
+_EXE_NAME = "colmap_sphere.exe" if _IS_WIN else "colmap_sphere"
+_PACK_BIN = os.path.join(_BIN_DIR, _EXE_NAME)
 
-# Auto-download config. The binary is a BSD-3-Clause build of github.com/json87/SphereSfM
-# (COLMAP 3.8 + sphere patches), CUDA archs sm_75..120 + PTX, published as a GitHub Release
-# asset rather than committed to the repo. First run fetches + extracts it into bin/.
+# Auto-download config, one bundle per platform. Every bundle is a BSD-3-Clause build of
+# github.com/json87/SphereSfM @ 6b40b2d (COLMAP 3.8 + sphere patches), published as a
+# GitHub Release asset rather than committed to the repo. First run fetches + extracts the
+# right one into bin/. Windows/Linux are CUDA builds (sm_75..120 + PTX); the Linux tar
+# also carries its shared libs in bin/lib/ ($ORIGIN rpath) and works on CPU-only machines
+# via the use_gpu-0 injection in _run(). macOS has no CUDA, so its build is CPU-only.
 _BUNDLE_REPO = "mickmumpitz/ComfyUI-SplatKit"
-_BUNDLE_TAG = "spheresfm-bin-v1"
-_BUNDLE_ASSET = "colmap_sphere_cuda_win64.zip"
-_BUNDLE_SHA256 = "85804badcad45a0b31e3154fc06a86a09eb79b7792b73b360c3954cd6a96038d"
-_BUNDLE_URL = os.environ.get("COLMAP_SPHERE_BUNDLE_URL") or (
-    "https://github.com/%s/releases/download/%s/%s" % (_BUNDLE_REPO, _BUNDLE_TAG, _BUNDLE_ASSET))
+_BUNDLES = {
+    "win64": {
+        "tag": "spheresfm-bin-v1", "asset": "colmap_sphere_cuda_win64.zip",
+        "sha256": "85804badcad45a0b31e3154fc06a86a09eb79b7792b73b360c3954cd6a96038d",
+        "size": "~37 MB"},
+    "linux-x64": {
+        "tag": "spheresfm-bin-v1", "asset": "colmap_sphere_cuda_linux64.tar.gz",
+        "sha256": "df072aabf23731615367be220e590cc5d8324038c9eafe77f9552e2b075b7540",
+        "size": "~51 MB"},
+    "macos-arm64": {
+        # Not published yet -- resolves to a clear "not available yet" error below.
+        "tag": "spheresfm-bin-v1", "asset": "colmap_sphere_macos_arm64.tar.gz",
+        "sha256": None, "size": "~40 MB"},
+}
+
+
+def _bundle_key():
+    """Which _BUNDLES entry fits this machine, or None if we have no build for it."""
+    import platform as _plat
+    m = _plat.machine().lower()
+    if _IS_WIN:
+        return "win64" if m in ("amd64", "x86_64") else None
+    if sys.platform.startswith("linux"):
+        return "linux-x64" if m in ("x86_64", "amd64") else None
+    if sys.platform == "darwin":
+        return "macos-arm64" if m == "arm64" else None
+    return None
+
+
+def _bundle_info():
+    key = _bundle_key()
+    info = dict(_BUNDLES[key]) if key else None
+    if info:
+        info["url"] = os.environ.get("COLMAP_SPHERE_BUNDLE_URL") or (
+            "https://github.com/%s/releases/download/%s/%s"
+            % (_BUNDLE_REPO, info["tag"], info["asset"]))
+    return key, info
 
 # Optional escape hatch for an existing colmap_sphere.exe elsewhere on the machine
 # (e.g. a 360Gaussian install): set COLMAP_SPHERE_EXE. Deliberately env-var-only -- the
@@ -138,18 +175,49 @@ _BUNDLE_URL = os.environ.get("COLMAP_SPHERE_BUNDLE_URL") or (
 _DEFAULT_360G_BIN = os.environ.get("COLMAP_SPHERE_360G_BIN", "")
 
 
-def _download_colmap_sphere_bundle():
-    """First-run fetch of the SphereSfM CUDA bundle from the GitHub Release into bin/.
-    Streams the zip, verifies SHA-256, extracts in place. Returns the exe path or None."""
-    import urllib.request
+def extract_bundle_archive(archive, dest=None):
+    """Unpack a bundle archive (zip or tar.gz) into bin/ and make the binary runnable:
+    tar keeps the run-permission bits, zip does not, so we re-apply them on non-Windows,
+    and on macOS we clear the quarantine flag Gatekeeper uses to block downloaded files."""
     import zipfile
+    import tarfile
+    dest = dest or _BIN_DIR
+    os.makedirs(dest, exist_ok=True)
+    if archive.endswith((".tar.gz", ".tgz")):
+        with tarfile.open(archive, "r:gz") as t:
+            try:
+                t.extractall(dest, filter="data")     # py3.12+: safe-paths filter
+            except TypeError:
+                t.extractall(dest)
+    else:
+        with zipfile.ZipFile(archive) as z:
+            z.extractall(dest)
+    exe = os.path.join(dest, _EXE_NAME)
+    if not _IS_WIN and os.path.isfile(exe):
+        os.chmod(exe, 0o755)
+    if sys.platform == "darwin":
+        subprocess.run(["xattr", "-dr", "com.apple.quarantine", dest],
+                       capture_output=True, check=False)
+    return exe if os.path.isfile(exe) else None
+
+
+def _download_colmap_sphere_bundle():
+    """First-run fetch of this platform's SphereSfM bundle from the GitHub Release into
+    bin/. Streams the archive, verifies SHA-256, extracts. Returns the exe path or None."""
+    import urllib.request
     import hashlib
+    key, info = _bundle_info()
+    if not info:
+        return None
+    if info["sha256"] is None and not os.environ.get("COLMAP_SPHERE_BUNDLE_URL"):
+        print("[SphereSfM] no published %s build yet -- see the error message below." % key)
+        return None
     os.makedirs(_BIN_DIR, exist_ok=True)
-    tmp = os.path.join(_BIN_DIR, "_bundle.zip.part")
-    print("[SphereSfM] colmap_sphere.exe not present -- downloading the CUDA binary bundle "
-          "(~37 MB, one time) from:\n  " + _BUNDLE_URL)
+    tmp = os.path.join(_BIN_DIR, "_bundle.part")
+    print("[SphereSfM] %s not present -- downloading the %s binary bundle "
+          "(%s, one time) from:\n  %s" % (_EXE_NAME, key, info["size"], info["url"]))
     try:
-        req = urllib.request.Request(_BUNDLE_URL,
+        req = urllib.request.Request(info["url"],
                                      headers={"User-Agent": "ComfyUI-SplatKit"})
         h = hashlib.sha256()
         with urllib.request.urlopen(req, timeout=60) as r, open(tmp, "wb") as out:
@@ -165,27 +233,29 @@ def _download_colmap_sphere_bundle():
                 if total:
                     print("\r[SphereSfM]   %3d%%" % (done * 100 // total), end="", flush=True)
         print()
-        if _BUNDLE_SHA256 and h.hexdigest() != _BUNDLE_SHA256:
+        if info["sha256"] and h.hexdigest() != info["sha256"]:
             raise RuntimeError("SHA-256 mismatch (got %s) -- aborting" % h.hexdigest())
-        with zipfile.ZipFile(tmp) as z:
-            z.extractall(_BIN_DIR)
-        os.remove(tmp)
+        # keep the real extension so extract_bundle_archive picks the right unpacker
+        named = tmp + (".tar.gz" if info["asset"].endswith((".tar.gz", ".tgz")) else ".zip")
+        os.replace(tmp, named)
+        got = extract_bundle_archive(named)
+        os.remove(named)
     except Exception as e:                       # noqa: BLE001 -- surface any failure clearly
-        if os.path.isfile(tmp):
-            os.remove(tmp)
+        for p in (tmp, tmp + ".zip", tmp + ".tar.gz"):
+            if os.path.isfile(p):
+                os.remove(p)
         print("[SphereSfM] auto-download failed: %s" % e)
         return None
-    if os.path.isfile(_PACK_BIN):
-        print("[SphereSfM] installed -> " + _PACK_BIN)
-        return _PACK_BIN
-    return None
+    if got:
+        print("[SphereSfM] installed -> " + got)
+    return got
 
 
 def find_colmap_sphere(explicit=""):
-    """Resolve the colmap_sphere.exe path: explicit arg -> env -> pack-local bin/ ->
+    """Resolve the colmap_sphere binary path: explicit arg -> env -> pack-local bin/ ->
     360Gaussian default -> anything named colmap_sphere on PATH. If nothing is present,
-    auto-downloads the bundle into bin/ (first run). Raises with an actionable message
-    only if that also fails."""
+    auto-downloads this platform's bundle into bin/ (first run). Raises with an
+    actionable message only if that also fails."""
     cands = []
     if explicit:
         cands.append(explicit)
@@ -200,27 +270,52 @@ def find_colmap_sphere(explicit=""):
         if c and os.path.isfile(c):
             return os.path.abspath(c)
     # Nothing local -- pull the bundle from the GitHub Release into bin/ (one time).
-    if _BUNDLE_URL:
-        got = _download_colmap_sphere_bundle()
-        if got:
-            return os.path.abspath(got)
+    got = _download_colmap_sphere_bundle()
+    if got:
+        return os.path.abspath(got)
+    key, info = _bundle_info()
+    if info is None:
+        raise RuntimeError(
+            "[SphereSfM] there is no prebuilt colmap_sphere binary for this platform "
+            "(%s / %s).\nYou can build SphereSfM from source (see tools/linux_build/ for "
+            "the recipe) and point the pack at it with the COLMAP_SPHERE_EXE environment "
+            "variable.\nSee docs/SPHERESFM.md for details." % (sys.platform, os.name))
+    if info["sha256"] is None:
+        raise RuntimeError(
+            "[SphereSfM] the %s build of colmap_sphere is not published yet.\n"
+            "You can build SphereSfM from source (see tools/linux_build/ for the recipe) "
+            "and point the pack at it with the COLMAP_SPHERE_EXE environment variable.\n"
+            "See docs/SPHERESFM.md for details." % key)
     raise RuntimeError(
-        "[SphereSfM] colmap_sphere.exe not found and the auto-download did not succeed.\n"
-        "It should be fetched automatically from:\n  " + _BUNDLE_URL + "\n"
-        "Check your internet connection, or download that zip manually and extract it into:\n  "
-        + _BIN_DIR + "\n"
-        "See docs/SPHERESFM.md for details.")
+        "[SphereSfM] %s not found and the auto-download did not succeed.\n"
+        "It should be fetched automatically from:\n  %s\n"
+        "Check your internet connection, or download that archive manually and run:\n"
+        "  python tools/install_spheresfm.py --archive <downloaded file>\n"
+        "See docs/SPHERESFM.md for details." % (_EXE_NAME, info["url"]))
 
 
 def _subprocess_env(exe_path):
-    """colmap_sphere.exe links its own colmap/boost/ceres dlls (alongside the exe in
-    bin/) AND the CUDA 12 runtime (cudart64_12.dll). In the 360Gaussian bundle that
+    """Make sure the child process can find the libraries shipped next to the binary.
+
+    Windows: colmap_sphere.exe links its own colmap/boost/ceres dlls (alongside the exe
+    in bin/) AND the CUDA 12 runtime (cudart64_12.dll). In the 360Gaussian bundle that
     runtime sits in _internal/ -- the PARENT of bin/ -- so add the exe dir and a couple
     of dirs above it to PATH for the child. NOTE: ComfyUI's bundled torch can be a
     different CUDA major (e.g. cu13), so we must NOT rely on torch/lib for cudart12; we
-    actively locate cudart64_12.dll near the exe instead."""
+    actively locate cudart64_12.dll near the exe instead.
+
+    Linux/macOS: the bundles carry their libraries in lib/ next to the binary and the
+    binary already knows to look there ($ORIGIN rpath), so this is just a belt-and-
+    suspenders library-path hint for unbundled/source builds."""
     env = dict(os.environ)
     exe_dir = os.path.dirname(exe_path)
+    if not _IS_WIN:
+        var = "DYLD_LIBRARY_PATH" if sys.platform == "darwin" else "LD_LIBRARY_PATH"
+        paths = [os.path.join(exe_dir, "lib"), exe_dir]
+        if env.get(var):
+            paths.append(env[var])
+        env[var] = os.pathsep.join(paths)
+        return env
     extra = [exe_dir]
     d = exe_dir
     for _ in range(3):                       # walk up: bin/ -> _internal/ -> ...
@@ -251,6 +346,48 @@ _STAGE_LABELS = {
 }
 
 
+_USE_GPU_SIFT = None
+
+
+def _gpu_sift_available():
+    """Should feature extraction/matching use the GPU? COLMAP defaults to yes, which is
+    right on Windows (CUDA bundle, NVIDIA assumed). On macOS there is no CUDA at all,
+    and on Linux the CUDA bundle still works fine on machines WITHOUT an NVIDIA card --
+    but only if we tell it to use the CPU. Cached after the first check."""
+    global _USE_GPU_SIFT
+    if _USE_GPU_SIFT is not None:
+        return _USE_GPU_SIFT
+    if os.environ.get("COLMAP_SPHERE_FORCE_CPU"):
+        _USE_GPU_SIFT = False
+    elif _IS_WIN:
+        _USE_GPU_SIFT = True                 # unchanged behavior for the existing bundle
+    elif sys.platform == "darwin":
+        _USE_GPU_SIFT = False                # no CUDA on macOS, ever
+    else:
+        try:
+            import torch
+            _USE_GPU_SIFT = bool(torch.cuda.is_available())
+        except Exception:                    # noqa: BLE001 -- no torch? keep the default
+            _USE_GPU_SIFT = True
+    if not _USE_GPU_SIFT:
+        print("[SphereSfM] no CUDA GPU here -- feature extraction/matching will run "
+              "on the CPU (slower, same result)")
+    return _USE_GPU_SIFT
+
+
+def _cpu_sift_args(args):
+    """Extra flags for one subcommand when GPU SIFT is unavailable (no-op otherwise)."""
+    if _gpu_sift_available():
+        return []
+    sub = args[0]
+    if sub == "feature_extractor" and "--SiftExtraction.use_gpu" not in args:
+        return ["--SiftExtraction.use_gpu", "0"]
+    if ((sub.endswith("_matcher") or sub == "matches_importer")
+            and "--SiftMatching.use_gpu" not in args):
+        return ["--SiftMatching.use_gpu", "0"]
+    return []
+
+
 def _run(exe, args, env, log_tail=40):
     """Run one colmap_sphere subcommand, STREAMING its output live to the console.
 
@@ -261,6 +398,7 @@ def _run(exe, args, env, log_tail=40):
     of the last ``log_tail`` lines for the error message."""
     import collections
     sub = args[0]
+    args = args + _cpu_sift_args(args)
     label = _STAGE_LABELS.get(sub, sub)
     print(f"[SphereSfM] === {sub}: {label} ===", flush=True)
     proc = subprocess.Popen([exe] + args, env=env, stdout=subprocess.PIPE,

@@ -1,0 +1,148 @@
+# Builds colmap_sphere (SphereSfM, CPU-only) for macOS on Apple-silicon.
+#
+# Run it from the repo's Actions tab ("Run workflow"). It produces
+# colmap_sphere_macos_arm64.tar.gz (+ .sha256) as a downloadable artifact; tick
+# "upload to release" to also attach it straight to the spheresfm-bin-v1 release.
+# After a new build, paste the printed SHA-256 into the macos-arm64 entry of
+# _BUNDLES in core/spheresfm_colmap.py.
+#
+# Mirrors the Windows/Linux builds (bin/BUILD_INFO.txt, tools/linux_build/):
+# json87/SphereSfM @ 6b40b2d, GUI/CGAL/tests off, the sift.cc GL-enum patch --
+# but CUDA off (no CUDA on macOS; the node always runs SIFT on CPU there).
+# Eigen is pinned to 3.4 and Ceres built against it from source, because the
+# COLMAP 3.8 codebase is incompatible with newer Eigen.
+
+name: Build SphereSfM macOS (arm64)
+
+on:
+  workflow_dispatch:
+    inputs:
+      upload_to_release:
+        description: "Also upload the tar.gz to the spheresfm-bin-v1 release"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write   # needed only for the optional release upload
+
+jobs:
+  build:
+    runs-on: macos-15
+    env:
+      SPHERESFM_COMMIT: 6b40b2d
+      ASSET: colmap_sphere_macos_arm64
+    steps:
+      - name: Install build tools + libraries (Homebrew)
+        run: |
+          brew install cmake ninja boost flann freeimage metis glog gflags glew dylibbundler
+
+      - name: Build Eigen 3.4 (pinned -- newer Eigen breaks COLMAP 3.8)
+        run: |
+          git clone --depth 1 --branch 3.4.0 https://gitlab.com/libeigen/eigen.git eigen
+          cmake -S eigen -B eigen/build -DCMAKE_INSTALL_PREFIX="$HOME/deps"
+          cmake --build eigen/build --target install
+
+      - name: Build Ceres 2.1.0 against the pinned Eigen
+        run: |
+          git clone --depth 1 --branch 2.1.0 https://github.com/ceres-solver/ceres-solver.git ceres
+          cmake -S ceres -B ceres/build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="$HOME/deps;$(brew --prefix)" \
+            -DCMAKE_INSTALL_PREFIX="$HOME/deps" \
+            -DBUILD_TESTING=OFF -DBUILD_EXAMPLES=OFF \
+            -DSUITESPARSE=OFF -DCXSPARSE=OFF -DEIGENSPARSE=ON
+          cmake --build ceres/build -j"$(sysctl -n hw.ncpu)"
+          cmake --build ceres/build --target install
+
+      - name: Fetch SphereSfM + apply the headless-SIFT patch
+        run: |
+          git clone https://github.com/json87/SphereSfM.git src
+          git -C src checkout "$SPHERESFM_COMMIT"
+          git -C src log -1 --format=%H > COMMIT.txt
+          python3 - <<'EOF'
+          path = 'src/src/feature/sift.cc'
+          body = open(path).read()
+          guard = ("#ifndef GL_LUMINANCE\n#define GL_LUMINANCE 0x1909\n#endif\n"
+                   "#ifndef GL_UNSIGNED_BYTE\n#define GL_UNSIGNED_BYTE 0x1401\n#endif\n")
+          open(path, 'w').write(guard + body)
+          print('patched', path)
+          EOF
+
+      - name: Compile (CPU-only)
+        run: |
+          cmake -S src -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="$HOME/deps;$(brew --prefix)" \
+            -DGUI_ENABLED=OFF -DCGAL_ENABLED=OFF -DTESTS_ENABLED=OFF \
+            -DCUDA_ENABLED=OFF
+          cmake --build build -j"$(sysctl -n hw.ncpu)"
+
+      - name: Package (bundle libraries, ad-hoc sign, tar keeps run-permissions)
+        run: |
+          mkdir -p out/lib
+          exe=$(find build -type f -perm +111 \( -name colmap -o -name colmap_sphere \) | head -n1)
+          test -n "$exe"
+          cp "$exe" out/colmap_sphere
+          chmod 755 out/colmap_sphere
+          (cd out && dylibbundler -od -b -x colmap_sphere -d lib/ -p '@executable_path/lib/')
+          codesign --force -s - out/colmap_sphere out/lib/*.dylib
+          cp src/COPYING.txt out/ 2>/dev/null || true
+          cp src/LICENSE out/ 2>/dev/null || true
+          FULL=$(cat COMMIT.txt)
+          {
+            echo "colmap_sphere -- SphereSfM (CPU) macOS arm64 build for ComfyUI-SplatKit"
+            echo "======================================================================="
+            echo ""
+            echo "Upstream source : https://github.com/json87/SphereSfM (commit $FULL)"
+            echo "Based on        : COLMAP 3.8 -- BSD-3-Clause (see LICENSE / COPYING.txt)"
+            echo "Toolchain       : AppleClang on macos-15 (GitHub Actions), Homebrew deps,"
+            echo "                  Eigen 3.4.0 + Ceres 2.1.0 built from source (Eigen-sparse BA)"
+            echo "CMake flags     : -DGUI_ENABLED=OFF -DCGAL_ENABLED=OFF -DTESTS_ENABLED=OFF -DCUDA_ENABLED=OFF"
+            echo "Runtime         : CPU-only (no CUDA on macOS); libraries bundled in lib/,"
+            echo "                  ad-hoc codesigned. The node passes use_gpu 0 automatically."
+            echo "Local patch     : src/feature/sift.cc GL enum #defines (same as Windows/Linux)."
+          } > out/BUILD_INFO.txt
+          printf '{"platform": "macos-arm64", "variant": "cpu", "commit": "%s"}\n' "$FULL" > out/BUNDLE_INFO.json
+          tar czf "$ASSET.tar.gz" -C out .
+          shasum -a 256 "$ASSET.tar.gz" | tee "$ASSET.tar.gz.sha256"
+
+      - name: Smoke test (fresh unpack, CPU feature extraction on generated frames)
+        run: |
+          mkdir -p smoke/frames smoke/t
+          tar xzf "$ASSET.tar.gz" -C smoke/t
+          smoke/t/colmap_sphere help | grep sphere_cubic_reprojecer
+          python3 - <<'EOF'
+          import random, struct
+          random.seed(7)
+          w, h = 640, 320
+          base = [[random.randrange(40, 216) for _ in range(3)] for _ in range(64)]
+          for i in range(3):
+              px = bytearray()
+              for y in range(h):
+                  for x in range(w):
+                      r, g, b = base[((x + 5 * i) // 20 + y // 20 * 9) % 64]
+                      px += struct.pack('BBB', r, g, b)
+              with open(f'smoke/frames/frame_{i:05d}.ppm', 'wb') as f:
+                  f.write(b'P6\n%d %d\n255\n' % (w, h) + px)
+          print('wrote 3 test frames')
+          EOF
+          smoke/t/colmap_sphere feature_extractor \
+            --database_path smoke/db.db --image_path smoke/frames \
+            --ImageReader.camera_model SPHERE --ImageReader.camera_params '1,320,160' \
+            --ImageReader.single_camera 1 --SiftExtraction.use_gpu 0
+          test -s smoke/db.db
+          echo "smoke test OK"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: colmap_sphere_macos_arm64
+          path: |
+            colmap_sphere_macos_arm64.tar.gz
+            colmap_sphere_macos_arm64.tar.gz.sha256
+
+      - name: Upload to the spheresfm-bin-v1 release (optional)
+        if: inputs.upload_to_release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload spheresfm-bin-v1 "$ASSET.tar.gz" --clobber --repo "$GITHUB_REPOSITORY"

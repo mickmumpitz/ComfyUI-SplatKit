@@ -1,8 +1,9 @@
 __pycache__/
 *.pyc
 skyseg.onnx
-# SphereSfM binary bundle -- auto-downloaded on first use, never committed.
+# SphereSfM binary bundle -- auto-downloaded on first use, never committed. Also build artifacts.
 bin/
+tools/linux_build
 # Test scratch output.
 tests/_e2e_out/
 tests/_colmap_out/
@@ -13,5 +14,5 @@ _input/
 objinfo.json
 # Local AI-assistant session config.
 .claude/
-# Segmented dataset workflow -- internal only, must not be published.
+# Segmented dataset workflow
 workflows/1_generate-dataset-hires-segmented.json

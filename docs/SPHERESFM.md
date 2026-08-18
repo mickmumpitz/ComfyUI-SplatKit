@@ -273,28 +273,36 @@ Outputs: `model_dir` (STRING), `num_images` (INT, total cube faces), `num_points
 
 ---
 
-## For maintainers: publishing / updating the binary
+## For maintainers: publishing / updating the binaries
 
-The binary is **not** committed to git. It's distributed as a GitHub Release asset and
-fetched by `core/spheresfm_colmap.py` (`_BUNDLE_REPO` / `_BUNDLE_TAG` / `_BUNDLE_ASSET` /
-`_BUNDLE_SHA256`). To publish a (new) build:
+The binaries are **not** committed to git. They're distributed as GitHub Release assets,
+one per platform, and fetched by `core/spheresfm_colmap.py` — the `_BUNDLES` table there
+maps each platform to its release tag, asset name, and SHA-256. To publish a (new) build:
 
-1. Build/refresh `bin/` (exe + runtime DLLs + `LICENSE` + `COPYING.txt` + `BUILD_INFO.txt`).
-2. Zip the **contents** of `bin/` (files at the zip root, not inside a subfolder):
-   ```
-   cd bin && zip -r ../colmap_sphere_cuda_win64.zip .
-   ```
-3. Compute its SHA-256 and paste it into `_BUNDLE_SHA256` in `core/spheresfm_colmap.py`
-   (also bump `_BUNDLE_TAG` if you change the release tag).
-4. Create a GitHub Release on the repo named in `_BUNDLE_REPO` with tag
-   `spheresfm-bin-v1` and upload `colmap_sphere_cuda_win64.zip` as an asset.
-   Link `docs/SPHERESFM-THIRD-PARTY-NOTICES.txt` in the release notes; the
-   per-library license notices live there (tracked in the repo), so the zip only
-   needs `LICENSE` + `COPYING.txt` + `BUILD_INFO.txt` alongside the binaries.
-   If the DLL set changes on a rebuild, update the notices file to match.
+1. Produce the bundle:
+   - **Windows**: build/refresh `bin/` (exe + runtime DLLs + `LICENSE` + `COPYING.txt` +
+     `BUILD_INFO.txt`), then zip the **contents** of `bin/` (files at the zip root, not
+     inside a subfolder): `cd bin && zip -r ../colmap_sphere_cuda_win64.zip .`
+   - **Linux**: run the Docker recipe in `tools/linux_build/` (works from Windows via
+     Docker Desktop/WSL): `docker build --target export --output type=local,dest=dist .`
+     from that folder. It compiles the fork, bundles all needed libraries into `lib/`,
+     and emits the finished `colmap_sphere_cuda_linux64.tar.gz` + its SHA-256 (the source
+     commit is recorded in the BUILD_INFO.txt inside the archive).
+   - **macOS**: run the "Build SphereSfM macOS (arm64)" workflow from the repo's Actions
+     tab (`.github/workflows/build-spheresfm-macos.yml`). GitHub's Mac runners compile a
+     CPU-only build, smoke-test it, and emit `colmap_sphere_macos_arm64.tar.gz` + SHA-256
+     as an artifact; tick "upload to release" to attach it to the release directly.
+2. Paste the archive's SHA-256 (and tag/asset name, if changed) into the matching
+   `_BUNDLES` entry in `core/spheresfm_colmap.py`.
+3. Upload the archive as an asset of the GitHub Release whose tag the entry names
+   (currently `spheresfm-bin-v1` for all platforms -- one release holds all the archives).
+   Link `docs/SPHERESFM-THIRD-PARTY-NOTICES.txt` in the release notes; the per-library
+   license notices live there (tracked in the repo), so the archives only need
+   `LICENSE` + `COPYING.txt` + `BUILD_INFO.txt` alongside the binaries.
+   If the bundled library set changes on a rebuild, update the notices file to match.
 
 The expected download URL is:
-`https://github.com/<repo>/releases/download/<tag>/colmap_sphere_cuda_win64.zip`
+`https://github.com/<repo>/releases/download/<tag>/<asset>`
 
-Rebuild-from-source recipe (toolchain, vcpkg deps, CMake flags, the Eigen-pin and
-GL-enum patch) is documented in `bin/BUILD_INFO.txt`.
+Rebuild-from-source recipes: `bin/BUILD_INFO.txt` (Windows toolchain, vcpkg deps, CMake
+flags, the Eigen-pin and GL-enum patch) and `tools/linux_build/Dockerfile` (Linux).
