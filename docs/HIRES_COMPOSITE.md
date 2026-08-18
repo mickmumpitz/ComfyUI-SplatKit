@@ -126,9 +126,9 @@ coverage collapsed 0.51 → 0.04.
 nodes sharing one `dataset_dir` all write into it, so only the last one's plain
 `camplot_rail.json` survives — every earlier trajectory's rail is gone, and nothing else on
 disk records the path a given WAN clip was flown along, so it cannot be recovered. Each node
-therefore also writes `_work/camplot_rail_<output_name>_<node_id>.json` and returns that path
-as `rail_json`. The node id is in there because `output_name` is *not* reliably unique — the
-shipped workflow has two Camera Plot nodes both named `camplot_path4`. If a rail is wrong the
+therefore also writes `_work/camplot_rail_<node_id>.json` and returns that path
+as `rail_json`. The name is keyed on the node id so each Camera Plot sharing a `dataset_dir`
+gets its own rail file and two plots can never overwrite each other. If a rail is wrong the
 composite lands on the wrong content everywhere, and coverage will not tell you: in geometry
 mode the gate is built from mesh validity and minification only, neither of which looks at
 WAN. Check the render instead.

@@ -312,7 +312,6 @@ class CameraPlotRenderControlGeo:
                                 "(set the target interactively in the editor)."}),
                 "length": ("INT", {"default": 81, "min": 9, "max": 257, "step": 4,
                     "tooltip": "Number of frames. MUST match the Wan Conditioning length (81)."}),
-                "output_name": ("STRING", {"default": "comfy_camplot"}),
                 # Geometry detail. This REPLACES the old point_budget widget IN PLACE (same
                 # slot, same INT type) so saved graphs don't shift positionally -- the old
                 # point_budget value (always 500-40000) migrates into this slot and, being
@@ -328,16 +327,16 @@ class CameraPlotRenderControlGeo:
             "optional": {
                 "dataset_dir": ("STRING", {"default": "",
                     "tooltip": "Wire the Dataset Project node here. When set, condition/ is "
-                               "written under it; otherwise it falls back to output_name."}),
+                               "written under it; otherwise it falls back to a default "
+                               "output folder."}),
                 "moge_ckpt": _moge_ckpt_input(),
                 "moge_model": _moge_model_input(),
             },
             # The graph node id, so each Camera Plot's rail gets its own filename even
-            # when two nodes share an output_name -- which the shipped workflow itself
-            # does (two nodes both named camplot_path4). Naming the rail after
-            # output_name alone would let those two silently overwrite each other, and
-            # an overwritten rail is unrecoverable: the composite needs the exact path
-            # its WAN clip was flown along, and nothing else on disk records it.
+            # when several plots share a dataset_dir. Naming the rail on anything less
+            # than the node id would let two plots silently overwrite each other, and an
+            # overwritten rail is unrecoverable: the composite needs the exact path its
+            # WAN clip was flown along, and nothing else on disk records it.
             "hidden": {"unique_id": "UNIQUE_ID"},
         }
 
@@ -351,7 +350,7 @@ class CameraPlotRenderControlGeo:
     CATEGORY = "SplatKit"
 
     def render(self, panorama, anchors, orientation, length,
-               output_name="comfy_camplot", moge_level=6,
+               moge_level=6,
                dataset_dir="", moge_ckpt=_MOGE_AUTO, moge_model=None, unique_id=None,
                point_budget=None):
         # moge_level occupies the slot the removed point_budget widget used. A graph saved
@@ -412,7 +411,7 @@ class CameraPlotRenderControlGeo:
 
         # Persist the rail as a plain nested-list JSON; nvrender.load_rail reads it
         # back as a stack of 4x4 world-to-camera matrices (preset_rail path).
-        base = dataset_dir if dataset_dir else _p2s_output_base(output_name)
+        base = dataset_dir if dataset_dir else _p2s_output_base("comfy_camplot")
         work = os.path.join(base, "_work")
         os.makedirs(work, exist_ok=True)
         # Per-node copy FIRST: several Camera Plot nodes in one graph normally share a
@@ -422,14 +421,12 @@ class CameraPlotRenderControlGeo:
         # the rail_json output. The unsuffixed file is still written for anything that
         # reads it by its old name.
         #
-        # The name carries the NODE ID as well as output_name, because output_name is
-        # not reliably unique -- the shipped workflow has two Camera Plot nodes both
-        # named camplot_path4, and naming on that alone would let them overwrite each
-        # other exactly as before. Losing a rail is unrecoverable: nothing else on disk
-        # records the path a given WAN clip was flown along.
-        safe = _safe_ref_name(output_name)
+        # The name carries the NODE ID, so each Camera Plot in a shared dataset_dir gets
+        # its own rail file and two plots can never overwrite each other. Losing a rail is
+        # unrecoverable: nothing else on disk records the path a given WAN clip was flown
+        # along.
         node_tag = _safe_ref_name(unique_id) if unique_id is not None else "node"
-        rail_json = os.path.join(work, f"camplot_rail_{safe}_{node_tag}.json")
+        rail_json = os.path.join(work, f"camplot_rail_{node_tag}.json")
         rail_payload = w2c.tolist()
         with open(rail_json, "w", encoding="utf-8") as f:
             json.dump(rail_payload, f)

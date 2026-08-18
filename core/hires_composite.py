@@ -266,7 +266,7 @@ def resolve_rail(path_or_dir):
     """Find a Camera Plot rail JSON given a rail file, condition dir or project dir.
 
     Prefer wiring the Camera Plot node's ``rail_json`` output, which names the file
-    after that node's ``output_name``. The unsuffixed ``camplot_rail.json`` is shared:
+    after that node's id. The unsuffixed ``camplot_rail.json`` is shared:
     every Camera Plot node pointed at one dataset_dir overwrites it, so in a
     multi-trajectory graph only the last one to run survives there. Falling back to it
     is therefore a guess, and this says so rather than compositing the wrong path.

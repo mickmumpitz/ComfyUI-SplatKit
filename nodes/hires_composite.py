@@ -160,7 +160,7 @@ class HiResComposite:
                                "dataset_dir all write condition/, so only the last one's plain "
                                "camplot_rail.json survives and the rest are lost for good. "
                                "rail_json points at that node's own copy, named "
-                               "camplot_rail_<output_name>_<node_id>.json. A folder or file "
+                               "camplot_rail_<node_id>.json. A folder or file "
                                "path also works."}),
                 "set_name": ("STRING", {"default": "hires_composite",
                     "tooltip": "Folder under ComfyUI/output that collects this scene's "
