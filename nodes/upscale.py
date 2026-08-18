@@ -6,7 +6,7 @@ NODE_CLASS_MAPPINGS by __init__.py, the same way the other add-ons are merged.
 Goal: take an EXISTING dataset folder (produced by this pack) by NAME, let a
 normal ComfyUI upscaler (SeedVR2 if you have it, otherwise the core
 UpscaleModelLoader -> ImageUpscaleWithModel chain) upscale every training image,
-then swap the folders so LichtFeld picks the upscaled images up automatically
+then swap the folders so the trainer picks the upscaled images up automatically
 while the low-res originals are kept untouched.
 
 Two nodes:
@@ -103,7 +103,7 @@ def _find_canonical_images_dir(dataset_name="", dataset_path="", lowres_suffix="
     """Resolve the CANONICAL images directory for a dataset.
 
     Returns the folder that holds (or held) the training images and whose name is
-    the one LichtFeld / COLMAP expects -- never a ``*_lowres`` sibling. Returns
+    the one COLMAP expects -- never a ``*_lowres`` sibling. Returns
     ``None`` if nothing plausible is found. Read-only (creates nothing)."""
     cands = []
 
@@ -325,7 +325,7 @@ class ResolveDatasetImages:
                              canonical images folder. Reading the originals every
                              time is what makes re-running the workflow idempotent
                              (you never upscale already-upscaled frames).
-      * ``canonical_dir`` -- the images folder name LichtFeld/COLMAP expect; wire
+      * ``canonical_dir`` -- the images folder name COLMAP expects; wire
                              this into the Save Upscaled Dataset node.
 
     Handles both the equirect layout (``.../dataset/images``) and the SphereSfM
@@ -423,7 +423,7 @@ class SaveUpscaledDataset:
                 "images": ("IMAGE", {"tooltip": "The upscaled image batch."}),
                 "canonical_dir": ("STRING", {"default": "",
                     "tooltip": "Wire Resolve Dataset Images -> canonical_dir here. The "
-                               "images folder LichtFeld/COLMAP expect."}),
+                               "images folder COLMAP expects."}),
             },
             "optional": {
                 "lowres_suffix": ("STRING", {"default": "_lowres",
@@ -543,7 +543,7 @@ class LoadDatasetImagesOrdered:
       * ``order_names``   -- JSON list of the filenames in the exact loaded order. Wire
                              this into Save Upscaled Dataset -> order_names so each
                              upscaled frame is written back to the right filename.
-      * ``canonical_dir`` -- the images folder LichtFeld/COLMAP expect (-> Save node).
+      * ``canonical_dir`` -- the images folder COLMAP expects (-> Save node).
       * ``group_sizes``   -- JSON list of sub-video lengths (one per camera face /
                              trajectory) for reference / seam-aware batching.
     """
@@ -1583,7 +1583,7 @@ class SphereSfMDatasetDualRes:
     8K -- SPHERE poses are angular, so they're resolution-independent. Doing SfM on the small
     equirects makes EXHAUSTIVE matching (what links non-adjacent trajectories into ONE
     model) cheap, while the 8K panoramas are spent only where they matter: the pinhole
-    faces LichtFeld actually trains on. The low-res model's SPHERE camera is rescaled to
+    faces the trainer actually trains on. The low-res model's SPHERE camera is rescaled to
     the 8K grid before reprojection samples the sharp source.
 
     SINGLE-RES: leave hires_dir EMPTY and the faces are reprojected from the very frames
@@ -1810,8 +1810,8 @@ class SphereSfMDatasetDualRes:
             on_split=on_split, hires_glob=hires_glob, hires_paths=hires_paths)
         print(f"[DualResSfM] {res['num_frames']} frames -> {res['num_images']} pinhole faces, "
               f"{res['num_points']} points ({res['num_models']} model(s)) -> {res['model_dir']}\n"
-              f"  Train (pinhole, NO --gut): LichtFeld-Studio.exe -d \"{res['sparse_dir']}/..\" "
-              f"-o <out> --headless --train --strategy mcmc --max-cap 2000000 --sh-degree 2")
+              f"  Standard COLMAP pinhole dataset -- train with any 3DGS trainer "
+              f"(point it at the dataset above).")
         return (res["model_dir"], res["num_images"], res["num_points"])
 
 
@@ -2008,8 +2008,7 @@ class SphereSfMAddToDatasetDualRes:
               f"({res['num_registered_images']} registered) -> {res['num_frames']} total "
               f"frames, {res['num_images']} images, {res['num_points']} points\n"
               f"  {res['model_dir']}\n"
-              f"  Train (pinhole, NO --gut): LichtFeld-Studio.exe -d \"{res['model_dir']}\" "
-              f"-o <out> --headless --train --strategy mcmc --max-cap 3000000 --sh-degree 2")
+              f"  Standard COLMAP pinhole dataset -- re-train with any 3DGS trainer.")
         return (res["model_dir"], res["num_images"], res["num_points"],
                 res["num_added_frames"])
 

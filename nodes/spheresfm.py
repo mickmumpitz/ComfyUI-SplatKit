@@ -25,9 +25,8 @@ class SphereSfMDataset:
     into 6 pinhole (SIMPLE_PINHOLE, 90 deg) cube faces per frame.
 
     Output = a standard COLMAP dataset folder (images/ + sparse/0/) under ComfyUI/output,
-    ready to train in LichtFeld -- pinhole, so NO --gut:
-      LichtFeld-Studio.exe -d <dataset> -o <out> --headless --train \\
-        --strategy mcmc --max-cap 2000000 --sh-degree 2
+    ready to train with any 3DGS trainer -- ordinary pinhole cameras, no equirect/unscented
+    projection required.
 
     NO cameras.npz / Render Control needed -- SfM estimates everything. Trade-off vs the
     feed-forward paths: this needs genuine camera MOVEMENT/parallax in the clip (a static
@@ -277,9 +276,8 @@ class SphereSfMDataset:
         print(f"[SphereSfMDataset] {res['num_frames']} equirect frames -> "
               f"{res['num_images']} pinhole cube-face views, {res['num_points']} points -> "
               f"{res['model_dir']}\n"
-              f"  Train in LichtFeld Studio (pinhole, NO --gut):\n"
-              f"  LichtFeld-Studio.exe -d \"{res['model_dir']}\" -o <out> --headless --train "
-              f"--strategy mcmc --max-cap 2000000 --sh-degree 2")
+              f"  Standard COLMAP pinhole dataset -- train with any 3DGS trainer "
+              f"(point it at the dataset above).")
         return (res["model_dir"], res["num_images"], res["num_points"])
 
 
@@ -429,11 +427,10 @@ class SphereSfMAddToDataset:
             face_size=int(face_size), image_order=image_order,
             new_trajectory_lengths=new_trajectory_lengths)
         print("[SphereSfMAddToDataset] added %d frames (%d registered) -> %d total frames, "
-              "%d images, %d points\n  %s\n  Re-train in LichtFeld (pinhole, NO --gut):\n"
-              "  LichtFeld-Studio.exe -d \"%s\" -o <out> --headless --train --strategy mcmc "
-              "--max-cap 2000000 --sh-degree 2"
+              "%d images, %d points\n  %s\n  Standard COLMAP pinhole dataset -- "
+              "re-train with any 3DGS trainer."
               % (res["num_added_frames"], res["num_registered_images"], res["num_frames"],
-                 res["num_images"], res["num_points"], res["model_dir"], res["model_dir"]))
+                 res["num_images"], res["num_points"], res["model_dir"]))
         return (res["model_dir"], res["num_images"], res["num_points"], res["num_added_frames"])
 
 

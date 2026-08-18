@@ -15,8 +15,8 @@ Pipeline (verified against colmap_sphere.exe == COLMAP 3.8 + the SphereSfM patch
   4. sphere_cubic_reprojecer  (SPHERE model -> 6 SIMPLE_PINHOLE 90-deg cube faces/frame)
 
 Step 4 turns the spherical reconstruction into an ordinary PINHOLE COLMAP dataset
-(images/*.png + sparse/0/{cameras,images,points3D}.bin) that LichtFeld trains WITHOUT
---gut (the cube faces are normal pinhole images). Output layout:
+(images/*.png + sparse/0/{cameras,images,points3D}.bin) that any COLMAP-compatible 3DGS
+trainer reads directly (the cube faces are normal pinhole images). Output layout:
 
   <out_dir>/
     images/frame_XXXXX_perspective_0000000N.png   (6 faces per input frame)

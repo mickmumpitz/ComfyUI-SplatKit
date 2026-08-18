@@ -1,10 +1,10 @@
-"""Build a panorama-native LichtFeld dataset from a SphereSfM reconstruction.
+"""Build a panorama-native (equirectangular) COLMAP dataset from a SphereSfM reconstruction.
 
 SphereSfM (colmap_sphere) poses equirects with camera model SPHERE (COLMAP model
-id 11, params [f, cx, cy]). LichtFeld-Studio's COLMAP reader has no entry for id
-11 -- it maps to UNDEFINED and the load fails. What LichtFeld wants for a 360
-panorama is EQUIRECTANGULAR (COLMAP model id 17, params [width, height]), which
-its rasterizer projects natively via the 3DGUT path.
+id 11, params [f, cx, cy]). This is a non-standard extension: mainline COLMAP readers
+have no entry for id 11 and fail to load it. The portable camera model for a 360
+panorama is EQUIRECTANGULAR (COLMAP model id 17, params [width, height]), which a
+3DGS trainer with equirect / unscented projection support can rasterize natively.
 
 The conversion is a camera-record rewrite and nothing else:
 
@@ -20,10 +20,9 @@ low-res solve onto the 8K grid before cube-face reprojection.
 The panoramas are hardlinked (copy fallback), so a 324-frame 8K dataset costs
 ~0 bytes rather than ~13 GB.
 
-Train the result WITH --gut -- equirect projection exists only in the unscented
-transform kernel (ProjectionUT3DGSFused.cu), not in the standard EWA path:
-
-    LichtFeld-Studio.exe -d <out_dir> -o <out> --headless --train --gut
+Train the result with a 3DGS trainer that supports equirectangular / unscented
+camera projection -- an equirect camera cannot be rasterized by the standard
+pinhole (EWA) path, only by an unscented-transform projection.
 
 Usage:
     python sphere_to_equirect_dataset.py <work_or_model_dir> <pano_dir> <out_dir>
@@ -104,7 +103,7 @@ def convert_cameras(cams, pano_w, pano_h):
             raise RuntimeError(
                 "camera %d is model_id=%d, not SPHERE(11). This script only "
                 "converts a SphereSfM equirect model -- a pinhole cube-face "
-                "model is already trainable as-is (without --gut)."
+                "model is already trainable as-is by any COLMAP trainer."
                 % (c["id"], c["model"]))
         # The SPHERE camera's w/h is what the panoramas actually are, provided
         # _rescale_sphere_cameras already retargeted it to the hi-res grid.
@@ -231,9 +230,9 @@ def main():
     print("wrote  : %s (%d hardlinked, %d copied)"
           % (image_dir, modes["link"], modes["copy"]))
 
-    print("\nTrain (equirect REQUIRES --gut):\n"
-          "  LichtFeld-Studio.exe -d \"%s\" -o <out> --headless --train --gut"
-          % os.path.abspath(args.out_dir))
+    print("\nEquirect COLMAP dataset -> %s\n"
+          "  Train with a 3DGS trainer that supports equirectangular / unscented "
+          "camera projection." % os.path.abspath(args.out_dir))
     return 0
 
 

@@ -117,8 +117,8 @@ class HiResComposite:
       * ``output_width=8192`` (default) -- at 8192 one output pixel covers one source
         pixel, so the 8K is sampled 1:1 through mip 0 instead of being box-downsampled
         first. Worth +26% reconstructed detail over 4096 on the same scene.
-      * train with ``--max-cap 3000000``. Every run in the research project silently
-        stopped at LichtFeld's 1M default, which was hiding the resolution gain.
+      * train with a high point/primitive cap (~3M). A low default cap (e.g. 1M) will
+        bottleneck the reconstruction and hide the resolution gain.
 
     WIRING
       * ``panorama`` -- the ORIGINAL full-resolution panorama (Poly Haven 8K, or your
@@ -410,7 +410,7 @@ class HiResComposite:
         print("[HiResComposite] " + report.replace("\n", "\n[HiResComposite] "))
         print("[HiResComposite] next: wire hires_manifest + proxy_frames into the SphereSfM "
               "(Dual-Res) node's hires_1 + pano_frames_1 -- no typed hires_glob needed. "
-              "Then train with --max-cap 3000000 -r 1 --max-width 4096.")
+              "Train the resulting dataset at full resolution with a high point/primitive cap.")
 
         # Self-describing handle for the SphereSfM nodes: THIS trajectory's own files, in
         # the same order as proxy_frames. Wiring it removes the typed hires_glob (and the

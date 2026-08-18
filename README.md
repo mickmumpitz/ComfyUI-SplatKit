@@ -4,8 +4,8 @@
 ComfyUI.**
 
 Feed it one equirectangular panorama and a prompt. You get back a **COLMAP dataset**
-(`images/` + `sparse/0` + an init point cloud) that trains straight away in LichtFeld Studio,
-gsplat, 3DGRUT or anything else that reads COLMAP. No external venv, nothing to build.
+(`images/` + `sparse/0` + an init point cloud) that trains straight away in any COLMAP-compatible
+3D Gaussian Splatting trainer. No external venv, nothing to build.
 
 SplatKit produces **datasets, not trained splats** — training stays in whichever trainer you
 already like.
@@ -104,15 +104,16 @@ optional refinements on top of the base pipeline — full detail in
 
 ## Training the dataset
 
-The COLMAP output is ordinary — point any trainer at it:
+The COLMAP output is ordinary — point any 3DGS trainer at the dataset folder (`images/` +
+`sparse/0`). The default output uses ordinary pinhole cameras, so no special projection support
+is required.
 
-```
-LichtFeld-Studio.exe -d output/<name> -o <out> --headless --train \
-  --strategy mcmc --max-cap 2000000 --sh-degree 2
-```
+Two things worth knowing whatever trainer you use:
 
-An **equirect** dataset (`Build Equirect Dataset`) needs `--gut`. For HiRes Composite datasets,
-train with `--max-cap 3000000` — LichtFeld's 1M default hides the resolution gain.
+- An **equirect** dataset (`Build Equirect Dataset`) stores equirectangular cameras, so it needs
+  a trainer that supports equirectangular / unscented camera projection.
+- For **HiRes Composite** datasets, allow a high point/primitive cap (~3M). A low default cap
+  (e.g. 1M) bottlenecks the reconstruction and hides the resolution gain.
 
 ## Rasterizer: Triton / pure-torch, no nvdiffrast
 
