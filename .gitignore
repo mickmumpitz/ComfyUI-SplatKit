@@ -16,3 +16,4 @@ objinfo.json
 .claude/
 # Segmented dataset workflow
 workflows/1_generate-dataset-hires-segmented.json
+workflows/1_generate-dataset-hires-ADV.json
