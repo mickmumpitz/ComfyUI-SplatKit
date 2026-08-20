@@ -396,11 +396,12 @@ def _run(exe, args, env, log_tail=40):
     stages (matching, mapping) looked frozen. We now echo each line as it arrives
     (prefixed so it's identifiable in ComfyUI's console) while keeping a ring buffer
     of the last ``log_tail`` lines for the error message."""
-    import collections
+    import collections, time
     sub = args[0]
     args = args + _cpu_sift_args(args)
     label = _STAGE_LABELS.get(sub, sub)
     print(f"[SphereSfM] === {sub}: {label} ===", flush=True)
+    t0 = time.monotonic()
     proc = subprocess.Popen([exe] + args, env=env, stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT, text=True, bufsize=1)
     tail = collections.deque(maxlen=max(int(log_tail), 1))
@@ -412,10 +413,12 @@ def _run(exe, args, env, log_tail=40):
             tail.append(line)
             print(f"[SphereSfM]   {line}", flush=True)
     proc.wait()
+    dt = time.monotonic() - t0
     if proc.returncode != 0:
         raise RuntimeError(
-            f"[SphereSfM] '{sub}' failed (exit {proc.returncode}):\n"
+            f"[SphereSfM] '{sub}' failed (exit {proc.returncode}) after {dt:.1f}s:\n"
             + "\n".join(tail))
+    print(f"[SphereSfM] === {sub}: done in {dt:.1f}s ===", flush=True)
     return "\n".join(captured)
 
 
@@ -852,6 +855,127 @@ def _resolve_add_equirect(work_dir):
     return plain, None, False          # missing -> caller reports it
 
 
+def _colmap_model_io():
+    """Load the COLMAP binary read/write helpers, working whether this module was imported
+    in-package (ComfyUI) or standalone-by-path (tests). ``colmap_write_model`` does a
+    relative ``from .colmap_read_model import ...``, so the standalone fallback registers a
+    synthetic package for the two to resolve against. Returns (read_mod, write_mod)."""
+    def _reg_sphere(crm):
+        # The reader ships only the standard 0-10 models; SphereSfM's SPHERE (11) must be
+        # registered before reading a spherical model (matches nodes/repair.py).
+        crm.CAMERA_MODELS.setdefault(11, ("SPHERE", 3))
+        return crm
+    try:
+        from ..tools import colmap_read_model as crm
+        from ..tools import colmap_write_model as cwm
+        return _reg_sphere(crm), cwm
+    except Exception:
+        import importlib.util as _ilu
+        import types as _types
+        tools_dir = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "tools"))
+        pkg = "_splatkit_tools"
+        if pkg not in sys.modules:
+            m = _types.ModuleType(pkg)
+            m.__path__ = [tools_dir]
+            sys.modules[pkg] = m
+
+        def _load(sub):
+            full = pkg + "." + sub
+            if full in sys.modules:
+                return sys.modules[full]
+            spec = _ilu.spec_from_file_location(full, os.path.join(tools_dir, sub + ".py"))
+            mod = _ilu.module_from_spec(spec)
+            sys.modules[full] = mod
+            spec.loader.exec_module(mod)
+            return mod
+        return _reg_sphere(_load("colmap_read_model")), _load("colmap_write_model")
+
+
+def _write_new_only_sphere_model(src_model, out_model, keep_names):
+    """Write a COPY of the SPHERE model at ``src_model`` keeping ONLY the images whose
+    filename is in ``keep_names`` (the newly-added equirect frames), plus the camera(s)
+    they use and the 3D points they observe (each track filtered to the kept images).
+
+    Reprojecting THIS instead of the whole model renders cube faces for the new frames
+    only -- the re-render of the existing frames' faces (which the add merge discards
+    anyway) is the ~95% of an add's time that this skips. A frame's cube-face poses depend
+    only on that frame, so trimming changes nothing about the output. Returns #images kept.
+    """
+    crm, cwm = _colmap_model_io()
+    cams = crm.read_cameras_binary(os.path.join(src_model, "cameras.bin"))
+    imgs = crm.read_images_binary(os.path.join(src_model, "images.bin"))
+    pts = crm.read_points3D_binary(os.path.join(src_model, "points3D.bin"))
+    keep = set(keep_names)
+    keep_ids = {iid for iid, im in imgs.items() if im.name in keep}
+    if not keep_ids:
+        raise RuntimeError("[SphereSfM/add] reproject-new: none of the new frame names were "
+                           "found in the registered model -- cannot trim, falling back.")
+    kept_imgs = {iid: imgs[iid] for iid in keep_ids}
+    kept_cams = {im.camera_id: cams[im.camera_id] for im in kept_imgs.values()
+                 if im.camera_id in cams}
+    kept_pts = {}
+    for pid, p in pts.items():
+        ii = np.asarray(p.image_ids, dtype=np.int64)
+        xi = np.asarray(p.point2D_idxs, dtype=np.int64)
+        mask = np.fromiter((int(i) in keep_ids for i in ii.tolist()), dtype=bool, count=ii.size)
+        if mask.any():
+            kept_pts[pid] = p._replace(image_ids=ii[mask], point2D_idxs=xi[mask])
+    kept_pt_ids = set(kept_pts.keys())
+    for iid, im in list(kept_imgs.items()):
+        pids = np.asarray(im.point3D_ids, dtype=np.int64)
+        pids = np.fromiter((p if p in kept_pt_ids else -1 for p in pids.tolist()),
+                           dtype=np.int64, count=pids.size)
+        kept_imgs[iid] = im._replace(point3D_ids=pids)
+    if os.path.isdir(out_model):
+        shutil.rmtree(out_model, ignore_errors=True)
+    os.makedirs(out_model, exist_ok=True)
+    cwm.write_cameras_binary(kept_cams, os.path.join(out_model, "cameras.bin"))
+    cwm.write_images_binary(kept_imgs, os.path.join(out_model, "images.bin"))
+    cwm.write_points3D_binary(kept_pts, os.path.join(out_model, "points3D.bin"))
+    return len(kept_imgs)
+
+
+def _append_cubeface_model(existing_dir, new_dir, out_dir):
+    """Union the cube-face records in ``new_dir`` (the reprojected NEW frames) onto the
+    existing cube-face model at ``existing_dir``, writing the result to ``out_dir`` (safe
+    to equal existing_dir -- everything is read into memory first). New camera / image /
+    point ids are offset past the existing maxima so nothing collides; the old records are
+    preserved verbatim. This replaces the wholesale sparse/0 rewrite that a FULL reproject
+    used to allow, now that only the new frames are reprojected."""
+    crm, cwm = _colmap_model_io()
+
+    def _rd(d):
+        return (crm.read_cameras_binary(os.path.join(d, "cameras.bin")),
+                crm.read_images_binary(os.path.join(d, "images.bin")),
+                crm.read_points3D_binary(os.path.join(d, "points3D.bin")))
+    old_c, old_i, old_p = _rd(existing_dir)
+    new_c, new_i, new_p = _rd(new_dir)
+    cam_off = max(old_c) if old_c else 0
+    img_off = max(old_i) if old_i else 0
+    pt_off = max(old_p) if old_p else 0
+    merged_c = dict(old_c)
+    cam_map = {}
+    for cid, cam in new_c.items():
+        cam_map[cid] = cid + cam_off
+        merged_c[cid + cam_off] = cam._replace(id=cid + cam_off)
+    merged_i = dict(old_i)
+    for iid, im in new_i.items():
+        pids = np.asarray(im.point3D_ids, dtype=np.int64)
+        pids = np.where(pids >= 0, pids + pt_off, -1)
+        merged_i[iid + img_off] = im._replace(
+            id=iid + img_off, camera_id=cam_map.get(im.camera_id, im.camera_id),
+            point3D_ids=pids)
+    merged_p = dict(old_p)
+    for pid, p in new_p.items():
+        merged_p[pid + pt_off] = p._replace(
+            id=pid + pt_off,
+            image_ids=np.asarray(p.image_ids, dtype=np.int64) + img_off)
+    os.makedirs(out_dir, exist_ok=True)
+    cwm.write_cameras_binary(merged_c, os.path.join(out_dir, "cameras.bin"))
+    cwm.write_images_binary(merged_i, os.path.join(out_dir, "images.bin"))
+    cwm.write_points3D_binary(merged_p, os.path.join(out_dir, "points3D.bin"))
+
+
 def add_to_spheresfm(frames, dataset_dir, exe_path="",
                      matcher_type="exhaustive", adjust_existing_cameras=False,
                      retriangulate=True, max_num_features=8192,
@@ -1105,7 +1229,7 @@ def add_to_spheresfm(frames, dataset_dir, exe_path="",
     if os.path.isfile(stale_fp):
         os.remove(stale_fp)
 
-    # 6) reproject the WHOLE extended model to pinhole cube faces.
+    # 6) reproject the SPHERE model to pinhole cube faces.
     #
     # Dual-res: sample the 8K set, which needs the SPHERE camera on the hi-res grid. Do
     # that on a THROWAWAY copy so the promoted base model stays on the low-res grid the
@@ -1125,22 +1249,49 @@ def add_to_spheresfm(frames, dataset_dir, exe_path="",
                 shutil.copy2(src, os.path.join(repro_model, b))
         _rescale_sphere_cameras(repro_model, hi_grid[0], hi_grid[1])
         repro_src = equ_hi_dir
+
+    image_dir = os.path.join(dataset_dir, "images")
+    sparse_dir = os.path.join(dataset_dir, "sparse", "0")
+    os.makedirs(image_dir, exist_ok=True)
+    os.makedirs(sparse_dir, exist_ok=True)
+
+    # Reproject ONLY the newly added frames when the existing cameras are fixed (the
+    # default) and sparse/0 is already a cube-face model we can append to. Re-rendering the
+    # existing frames' faces just to discard them in the merge is the dominant cost of an
+    # add (measured ~95% of the total: ~390s of a ~410s add on a 164-frame set). A frame's
+    # cube-face poses depend only on that frame, so trimming the model to the new frames
+    # leaves the output identical -- it only skips the wasted re-render. Falls back to a
+    # full reproject + wholesale sparse/0 replace when the cameras moved, when sparse/0 is
+    # not yet a cube-face model (first build / a non-cube-face dataset), or if trimming
+    # fails for any reason.
+    have_cubefaces = bool(glob.glob(os.path.join(image_dir, "*_perspective_*.png"))) \
+        and os.path.isfile(os.path.join(sparse_dir, "images.bin"))
+    only_new = (not adjust_existing_cameras) and have_cubefaces
+    reproject_model = repro_model
+    if only_new:
+        try:
+            trim_model = os.path.join(work_dir, "sparse_inc_newonly")
+            n_keep = _write_new_only_sphere_model(repro_model, trim_model, new_names)
+            reproject_model = trim_model
+            print("[SphereSfM/add] reproject-new: rendering cube faces for the %d new "
+                  "frame(s) only; existing faces are kept as-is." % n_keep)
+        except Exception as e:                      # noqa: BLE001 -- degrade, never fail
+            print("[SphereSfM/add] reproject-new trim failed (%s) -- falling back to a full "
+                  "reproject." % e)
+            only_new = False
+            reproject_model = repro_model
+
     repro = ["sphere_cubic_reprojecer", "--image_path", repro_src,
-             "--input_path", repro_model, "--output_path", cubic_dir]
+             "--input_path", reproject_model, "--output_path", cubic_dir]
     if int(face_size) > 0:
         repro += ["--image_size", str(int(face_size))]
     _run(exe, repro, env)
     _stage_done(5)
 
     # Merge the refreshed cube faces into the dataset. With the existing cameras fixed the
-    # OLD faces are re-rendered identically, so we keep whatever is already in images/ and
-    # only drop in the faces for the newly added frames (also fills any that went missing).
-    # When existing cameras were allowed to move, every face may have shifted -> replace all.
-    image_dir = os.path.join(dataset_dir, "images")
-    sparse_dir = os.path.join(dataset_dir, "sparse", "0")
-    os.makedirs(image_dir, exist_ok=True)
-    os.makedirs(sparse_dir, exist_ok=True)
-
+    # OLD faces are unchanged, so we keep whatever is already in images/ and only drop in
+    # the faces for the newly added frames (also fills any that went missing). When the
+    # existing cameras were allowed to move, every face may have shifted -> replace all.
     faces = glob.glob(os.path.join(cubic_dir, "*_perspective_*.png"))
     if adjust_existing_cameras:
         for old in glob.glob(os.path.join(image_dir, "*_perspective_*.png")):
@@ -1154,11 +1305,17 @@ def add_to_spheresfm(frames, dataset_dir, exe_path="",
         if adjust_existing_cameras or frame_idx >= first_new or not os.path.isfile(dst):
             shutil.move(p, dst)
             moved += 1
-    # sparse/0 must always become the FULL extended reconstruction.
-    for b in ("cameras.bin", "images.bin", "points3D.bin"):
-        src = os.path.join(cubic_dir, "sparse", b)
-        if os.path.isfile(src):
-            shutil.move(src, os.path.join(sparse_dir, b))
+    # sparse/0 must end up as the FULL extended reconstruction. A reproject-new pass only
+    # produced the new frames' records, so APPEND them onto the existing model; a full
+    # reproject already IS the whole model, so drop it in wholesale (legacy behaviour).
+    new_sparse = os.path.join(cubic_dir, "sparse")
+    if only_new:
+        _append_cubeface_model(sparse_dir, new_sparse, sparse_dir)
+    else:
+        for b in ("cameras.bin", "images.bin", "points3D.bin"):
+            src = os.path.join(new_sparse, b)
+            if os.path.isfile(src):
+                shutil.move(src, os.path.join(sparse_dir, b))
 
     total_frames = base_n_frames + num_added
     total_faces = len(glob.glob(os.path.join(image_dir, "*_perspective_*.png")))
