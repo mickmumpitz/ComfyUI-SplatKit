@@ -360,7 +360,7 @@ class CameraPlotFlythroughPersp:
                 "moge_model": _moge_model_input(),
                 # Appended LAST: a new widget must land after every pre-existing one so a
                 # saved graph's widgets_values (positional) doesn't shift out of alignment.
-                "look_at_target": ("STRING", {"default": "0, 0, 0.8",
+                "look_at_target": ("STRING", {"default": "0, 0, 3",
                     "tooltip": "The single world point ALL frames aim at when orientation = "
                                "look_at_target. 'x, y, z' in the SAME literal units as the "
                                "anchors / geometry overlay. Draggable in the editor (the "

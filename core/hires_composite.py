@@ -69,7 +69,15 @@ DEFAULTS = dict(
     gate_ema=0.6,        # temporal smoothing of the gate
     # hard_soft_edge | hard | soft_original -- see the gate build in run_composite
     gate_mode="hard_soft_edge",
-    gate_edge=4.0,       # sigma of the edge fade, in OUTPUT pixels, for hard_soft_edge
+    gate_edge=4.0,       # sigma of the edge fade, in OUTPUT pixels, for hard_soft_edge.
+                         # 0 gives the same genuinely-binary edge as gate_mode="hard"
+                         # (only matters when gate_mode == "hard_soft_edge").
+    edge_erode=0,        # OUTPUT px to pull the source side back from the raw gate
+                         # boundary before any feathering, in BOTH hard_gate modes. 0 =
+                         # off (unchanged behaviour) -- the confidence mask is already
+                         # eroded by 7 geometry px upstream (see gate_build), so this is
+                         # only needed if smeared boundary source pixels still survive
+                         # that. Use it to trim a residual bright/broken seam ring.
     sem_thresh=0.5,      # cutoff on the reprojected semantic mask -> force-WAN region
     mip_levels=5,        # mip pyramid depth for anti-aliased texture sampling
     chunk=10,            # frames per render call
@@ -773,6 +781,9 @@ def run_composite(src_hi, pano_geo, rail, out_dir, wan=None, out_w=8192,
     gate_mode = str(P.get("gate_mode", "hard_soft_edge")).lower()
     hard_gate = gate_mode != "soft_original"
     edge_sig = float(P.get("gate_edge", 4.0)) if gate_mode == "hard_soft_edge" else 0.0
+    # OUTPUT px to erode the source side back from the raw gate boundary before any
+    # feathering, in either hard_gate mode. Off (0) by default -- see DEFAULTS.
+    edge_erode = int(P.get("edge_erode", 0)) if hard_gate else 0
     gate_prev = None
     cover, manifest, proxies, gates = [], [], [], []
     pw = max(64, int(proxy_width))
@@ -922,6 +933,16 @@ def run_composite(src_hi, pano_geo, rail, out_dir, wan=None, out_w=8192,
                             # and then interpolating puts the fractions straight back in.
                             if hard_gate:
                                 gate_t = (gate_t > 0.5).to(gate_t.dtype)
+                                if edge_erode > 0:
+                                    # Shrink the source (1) region by a few OUTPUT px
+                                    # before any feathering, so the ring of source
+                                    # pixels right at the boundary -- the ones most
+                                    # likely to be a stretched/smeared reprojection at
+                                    # the mesh-validity edge -- never reaches the
+                                    # composite at all.
+                                    gate_t = _erode_t(
+                                        torch, gate_t[0, 0],
+                                        2 * edge_erode + 1)[None, None]
                                 if edge_sig > 0:
                                     # Only the boundary softens: a few output pixels
                                     # either side. Everything further in stays exactly 0
@@ -989,6 +1010,14 @@ def run_composite(src_hi, pano_geo, rail, out_dir, wan=None, out_w=8192,
                                       interpolation=cv2.INTER_LINEAR)[..., None]
                     if hard_gate:
                         gate = (gate > 0.5).astype(np.float32)
+                        if edge_erode > 0:
+                            # Same boundary trim as the geometry path: pull the source
+                            # side back before any feathering so a smeared reprojection
+                            # ring at the mesh-validity edge cannot survive.
+                            k = 2 * edge_erode + 1
+                            gate = cv2.erode(
+                                gate[..., 0],
+                                np.ones((k, k), np.uint8))[..., None]
                         if edge_sig > 0:
                             gate = cv2.GaussianBlur(gate[..., 0], (0, 0),
                                                     edge_sig)[..., None]

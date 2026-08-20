@@ -329,6 +329,23 @@ class HiResComposite:
                                "either way: the proxy_frames OUTPUT is always populated and "
                                "is what actually feeds pano_frames_* downstream -- nothing in "
                                "this pack re-reads proxies/ off disk."}),
+                "gate_edge": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 32.0, "step": 0.5,
+                    "tooltip": "Only used when gate_mode=hard_soft_edge: sigma (in OUTPUT "
+                               "pixels) of the FEATHER applied to the gate boundary so the "
+                               "photo/WAN join does not stair-step. Default 0 = genuinely "
+                               "BINARY gate: every pixel is either pure panorama or pure WAN "
+                               "fill, no in-between blend band at all (WAN fills the hole, so "
+                               "the feather band tended to add bright/broken pixels for no "
+                               "gain). Set it above 0 to soften the join instead -- e.g. 4.0 "
+                               "for the old shipped feather. This ONLY feathers; it never "
+                               "erodes (see edge_erode for that)."}),
+                "edge_erode": ("INT", {"default": 0, "min": 0, "max": 32, "step": 1,
+                    "tooltip": "Pull the panorama side back this many OUTPUT pixels from "
+                               "the raw gate boundary before any feathering (both hard_gate "
+                               "modes). 0 (default): off, unchanged behaviour. The confidence "
+                               "gate is already eroded upstream, so this is only needed if "
+                               "you still see a bright/broken ring of smeared reprojection "
+                               "right at the seam after setting gate_edge=0 -- try 1-2 first."}),
             },
             "hidden": {"unique_id": "UNIQUE_ID"},
         }
@@ -346,7 +363,8 @@ class HiResComposite:
             depth_grid="geometry_res", moge_ckpt=_MOGE_AUTO, rho_hi=4.0, tone_work=1024,
             prefetch=True, save_video=False, debug_save="off", gate_mode="hard_soft_edge",
             tone_mode="luma", moge_model=None, semantic_pano=None,
-            auto_name=False, unique_id=None, save_proxies=True):
+            auto_name=False, unique_id=None, save_proxies=True,
+            gate_edge=0.0, edge_erode=0):
         import glob as _glob
         import json as _json
         import time
@@ -398,7 +416,8 @@ class HiResComposite:
             moge_kwargs=moge_kwargs, depth_grid=depth_grid, prefetch=bool(prefetch),
             params=dict(geom_scale=int(geom_scale), rho_hi=float(rho_hi),
                         tone_work=int(tone_work), tone_mode=tone_mode,
-                        gate_mode=gate_mode),
+                        gate_mode=gate_mode, gate_edge=float(gate_edge),
+                        edge_erode=int(edge_erode)),
             debug_save=debug_save, progress=progress, semantic=sem,
             save_proxies=bool(save_proxies))
         dt = time.perf_counter() - t0
