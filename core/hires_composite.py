@@ -466,12 +466,12 @@ def _despeckle(torch, cv2, g_t, min_area):
 _DEBUG_README = """\
 HiRes Composite -- what went into each frame
 ============================================
-Every folder here holds the SAME frames as ../frames/, under the SAME filenames, at
-{w}x{h}. Open one filename across the folders to see that frame taken apart.
+Every folder here holds the SAME frames as ../_spheresfm_work/frames/, under the SAME
+filenames, at {w}x{h}. Open one filename across the folders to see that frame taken apart.
 
 The whole composite is just this, per pixel:
 
-    frames/  =  gate * source  +  (1 - gate) * wan_fill
+    _spheresfm_work/frames/  =  gate * source  +  (1 - gate) * wan_fill
 
 source/        The original high-res panorama, reprojected into this camera view.
                This is the good stuff -- real photograph, not generated.
@@ -680,8 +680,14 @@ def run_composite(src_hi, pano_geo, rail, out_dir, wan=None, out_w=8192,
     # poses are angular, so 8K buys nothing there and exhaustive matching stays cheap)
     # while the cube faces are reprojected from frames/ read off disk. Loading the 8K
     # set into a ComfyUI tensor instead would be ~33 GB for four trajectories.
-    frames_dir = os.path.join(out_dir, "frames")
-    proxy_dir = os.path.join(out_dir, "proxies")
+    #
+    # Both live UNDER _spheresfm_work/ (not the dataset root): they are SfM inputs, and
+    # the SfM node stages equirect_hires as a hardlink of frames/ right next to them, so
+    # grouping them keeps the top-level dataset folder clean. The hires_manifest output
+    # carries ABSOLUTE paths (globbed from here), so the Add node follows wherever this is.
+    work_root = os.path.join(out_dir, "_spheresfm_work")
+    frames_dir = os.path.join(work_root, "frames")
+    proxy_dir = os.path.join(work_root, "proxies")
     os.makedirs(frames_dir, exist_ok=True)
     os.makedirs(proxy_dir, exist_ok=True)
 
@@ -1046,7 +1052,7 @@ def run_composite(src_hi, pano_geo, rail, out_dir, wan=None, out_w=8192,
                 # was a third of the per-frame budget with the GPU idle throughout.
                 with prof.t("write_queue"):
                     writer.save(os.path.join(frames_dir, fname), comp)
-                manifest.append({"frame": int(fi), "file": f"frames/{fname}",
+                manifest.append({"frame": int(fi), "file": f"_spheresfm_work/frames/{fname}",
                                  "coverage": round(float(cover[-1]), 4),
                                  "w2c": np.asarray(rail[fi]).tolist()})
                 if save_proxies:

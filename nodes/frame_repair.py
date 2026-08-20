@@ -35,6 +35,24 @@ import os
 
 from ..core import frame_repair as fr
 
+# Push progress to the browser so web/frame_repair.js can auto-queue the next frame.
+# Guarded: a missing PromptServer (headless / import order) must never break the node.
+try:
+    from server import PromptServer as _PS
+except Exception:
+    _PS = None
+
+
+def _send_progress(remaining, auto, frame):
+    if _PS is None:
+        return
+    try:
+        _PS.instance.send_sync("splatkit-repair-progress",
+                               {"remaining": int(remaining), "auto": bool(auto),
+                                "frame": frame})
+    except Exception:
+        pass
+
 
 def _resolve_dataset(name_or_dir):
     """An existing path is used as-is; else treat it as a dataset name under
@@ -116,6 +134,11 @@ class PrepareRepairBatch:
                                "optical axis best matches this one -- the correct reference. "
                                "OFF: reuse the damaged frame as its own reference (no COLMAP "
                                "axis match); lower quality, use only if poses are unavailable."}),
+                "auto_continue": ("BOOLEAN", {"default": True,
+                    "tooltip": "Auto-queue the next frame after each one finishes, until all "
+                               "selected frames are repaired -- so one Queue press does the "
+                               "whole set (no batch-count needed). Needs the web UI open. Turn "
+                               "OFF to advance one frame per Queue press instead."}),
             },
         }
 
@@ -130,7 +153,7 @@ class PrepareRepairBatch:
 
     def run(self, dataset_dir="", selection_method="rank_by_damage", max_frames=200,
             every_nth=8, skip_featureless=True, featureless_threshold=8.0,
-            use_pose_matched_reference=True):
+            use_pose_matched_reference=True, auto_continue=True):
         ds = _resolve_dataset(dataset_dir)
         image_dir = os.path.join(ds, "images")
         model = fr.SceneModel(ds)
@@ -156,7 +179,8 @@ class PrepareRepairBatch:
         total = len(entries)
         n_done = total - len(remaining)
 
-        job = json.dumps({"dataset_dir": ds, "image_dir": image_dir})
+        job = json.dumps({"dataset_dir": ds, "image_dir": image_dir,
+                          "auto": bool(auto_continue)})
 
         if built:
             print("[PrepareRepairBatch] built manifest (%s): %d/%d faces selected by "
@@ -246,24 +270,36 @@ class WriteBackRepairedFrame:
         return float("nan")
 
     def run(self, repaired, frame_name="", job="", write_mode="backup_and_replace"):
-        name = (frame_name or "").strip()
-        if not name:
-            print("[WriteBackRepairedFrame] queue drained (empty frame_name) -- nothing "
-                  "written.", flush=True)
-            return ("", "queue drained -- nothing to write")
         try:
             j = json.loads(job) if job else {}
         except Exception:
             j = {}
         ds = j.get("dataset_dir")
         image_dir = j.get("image_dir")
+        auto = bool(j.get("auto", False))
+
+        name = (frame_name or "").strip()
+        if not name:
+            # Queue drained: Prepare emitted the placeholder. Tell the UI to stop.
+            remaining = fr.remaining_count(ds) if ds else 0
+            _send_progress(remaining, auto, "")
+            print("[WriteBackRepairedFrame] queue drained (empty frame_name) -- nothing "
+                  "written.", flush=True)
+            return ("", "queue drained -- nothing to write")
+
         if not ds or not image_dir:
             raise RuntimeError("[WriteBackRepairedFrame] job is missing dataset paths -- "
                                "wire Prepare Repair Batch -> job into this node.")
 
         dst = fr.write_repaired(ds, image_dir, name, repaired, write_mode=write_mode)
         done = fr.mark_done(ds, name)
-        report = "wrote %s\n  mode: %s\n  done: %d frame(s)" % (dst, write_mode, len(done))
+        remaining = fr.remaining_count(ds)
+        # Fire AFTER done.json is written, so the auto-queued next run cannot pick this
+        # same frame. web/frame_repair.js queues one more when remaining > 0 and auto is on.
+        _send_progress(remaining, auto, name)
+        report = ("wrote %s\n  mode: %s\n  done: %d frame(s)\n  remaining: %d%s"
+                  % (dst, write_mode, len(done), remaining,
+                     "  (auto-continuing)" if (auto and remaining > 0) else ""))
         print("[WriteBackRepairedFrame] " + report.replace("\n", "\n                        "),
               flush=True)
         return (dst, report)

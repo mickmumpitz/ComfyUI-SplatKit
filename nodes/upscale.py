@@ -1832,17 +1832,19 @@ class SphereSfMDatasetDualRes:
         return (res["model_dir"], res["num_images"], res["num_points"])
 
     @staticmethod
-    def _cleanup_hires_source(hires_paths, work_dir):
+    def _cleanup_hires_source(hires_paths, work_dir, first_idx=0):
         """Delete each consumed hi-res equirect from its ORIGINAL folder (typically the
         HiRes Composite's frames/), but ONLY once a same-size copy is confirmed staged in
-        this dataset's _spheresfm_work/equirect_hires -- run_spheresfm_dualres's own
-        reprojection source, so its presence there (with the right byte size) is proof the
-        file this run needed is safe. Never touches anything outside the exact paths this
+        this dataset's _spheresfm_work/equirect_hires -- the reprojection source, so its
+        presence there (with the right byte size) is proof the file this run needed is safe.
+        ``first_idx`` is the dataset frame number the FIRST consumed file was staged as: 0
+        for a from-scratch build, or the base frame count for an add (which appends its new
+        frames after the existing ones). Never touches anything outside the exact paths this
         run itself resolved and staged; any mismatch just skips that file and says why."""
         equ_hi = os.path.join(work_dir, "equirect_hires")
         removed, skipped = 0, 0
         for i, src in enumerate(hires_paths):
-            staged = os.path.join(equ_hi, "frame_%05d.png" % i)
+            staged = os.path.join(equ_hi, "frame_%05d.png" % (first_idx + i))
             try:
                 if (os.path.isfile(staged) and os.path.isfile(src)
                         and os.path.getsize(staged) == os.path.getsize(src)):
@@ -1945,6 +1947,15 @@ class SphereSfMAddToDatasetDualRes:
                     "tooltip": "Min verified inliers to register a new image. Lower if the new "
                                "frames won't register; raise for stricter."}),
                 "image_order": (["camera_major", "frame_major"], {"default": "camera_major"}),
+                # Appended LAST so saved graphs' positional widgets_values don't shift.
+                "cleanup_hires_source": ("BOOLEAN", {"default": False,
+                    "tooltip": "After the add, delete the NEW trajectory's consumed 8K frames "
+                               "from the HiRes Composite's frames/ folder -- but only once a "
+                               "same-size copy is confirmed staged in this dataset's "
+                               "_spheresfm_work/equirect_hires. OFF by default. Note: if frames/ "
+                               "and equirect_hires are on the same volume they are hardlinked, "
+                               "so this reclaims a directory listing but ~no disk; it frees real "
+                               "space only when they are separate copies."}),
             },
         }
 
@@ -1961,7 +1972,8 @@ class SphereSfMAddToDatasetDualRes:
             face_size=0, max_num_features=8192, peak_threshold=0.0066,
             edge_threshold=10.0, max_num_matches=32768, abs_pose_min_num_inliers=30,
             image_order="camera_major",
-            hires_1=None, hires_2=None, hires_3=None, hires_4=None):
+            hires_1=None, hires_2=None, hires_3=None, hires_4=None,
+            cleanup_hires_source=False):
         import numpy as np
 
         from ..core import spheresfm_colmap as ss
@@ -2055,6 +2067,13 @@ class SphereSfMAddToDatasetDualRes:
               f"frames, {res['num_images']} images, {res['num_points']} points\n"
               f"  {res['model_dir']}\n"
               f"  Standard COLMAP pinhole dataset -- re-train with any 3DGS trainer.")
+        if cleanup_hires_source and hires_paths:
+            # The add appended its new frames AFTER the existing ones, so the first consumed
+            # file was staged as frame_<base_count>. Pass that offset so the staged-copy check
+            # matches the right equirect_hires files.
+            first_new = int(res["num_frames"]) - int(res["num_added_frames"])
+            SphereSfMDatasetDualRes._cleanup_hires_source(
+                hires_paths, os.path.join(ds_dir, "_spheresfm_work"), first_idx=first_new)
         return (res["model_dir"], res["num_images"], res["num_points"],
                 res["num_added_frames"])
 

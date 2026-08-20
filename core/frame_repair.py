@@ -347,6 +347,30 @@ def load_or_build_manifest(dataset_dir, phash, builder):
     return man, True
 
 
+def load_manifest(dataset_dir):
+    """The persisted manifest dict, or None if there is none yet."""
+    p = os.path.join(_work_dir(dataset_dir), MANIFEST_NAME)
+    if os.path.isfile(p):
+        try:
+            with open(p, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return None
+    return None
+
+
+def remaining_count(dataset_dir):
+    """How many selected frames are not yet written back. 0 if no manifest exists.
+
+    Read straight off disk (manifest + done set) so the terminal Write Back node can
+    report progress without re-running the selection."""
+    man = load_manifest(dataset_dir)
+    if not man:
+        return 0
+    done = read_done(dataset_dir)
+    return sum(1 for e in man.get("entries", []) if e.get("damaged") not in done)
+
+
 def _done_path(dataset_dir):
     return os.path.join(_work_dir(dataset_dir), DONE_NAME)
 
