@@ -134,26 +134,96 @@ def _camplot_catmull_rom(anchors, n_samples):
     return out
 
 
-def _camplot_c2w_stack(positions, mode, target=None):
+def _camplot_catmull_rom_tangent(anchors, n_samples):
+    """Analytic Catmull-Rom velocity (dP/du) at each of ``_camplot_catmull_rom``'s samples.
+
+    Differentiating the exact cubic (same P0..P3, k, t as the position spline above)
+    instead of finite-differencing the SAMPLED positions is what makes look_forward's
+    heading precise: a discrete np.gradient over the samples is only as smooth as the
+    sampling, so any local curvature or uneven anchor spacing (segments of very
+    different chord length, since sampling is uniform in the spline PARAMETER, not in
+    arc length) shows up as frame-to-frame heading noise once normalised to a unit
+    vector. This is the curve's exact tangent at every parameter value, so the heading
+    is exactly as smooth as the path itself -- no discretisation artefacts, and no
+    dependence on how densely it happens to be sampled. Only the DIRECTION matters to
+    the caller; the varying |du| "speed" (faster through short segments) is unused.
+    """
+    import numpy as np
+    pts = np.asarray(anchors, dtype=np.float64)
+    N = pts.shape[0]
+    n_samples = max(int(n_samples), 1)
+    if N == 2:
+        return np.tile(pts[1] - pts[0], (n_samples, 1))
+    p0 = 2.0 * pts[0] - pts[1]
+    pn = 2.0 * pts[-1] - pts[-2]
+    ext = np.vstack([p0, pts, pn])                 # (N+2, 3); ext[1..N] == anchors
+    us = np.linspace(0.0, N - 1, n_samples)
+    out = np.empty((n_samples, 3), dtype=np.float64)
+    for j, u in enumerate(us):
+        k = min(int(np.floor(u)), N - 2)
+        t = u - k
+        P0, P1, P2, P3 = ext[k], ext[k + 1], ext[k + 2], ext[k + 3]
+        t2 = t * t
+        out[j] = 0.5 * ((-P0 + P2)
+                        + 2.0 * (2.0 * P0 - 5.0 * P1 + 4.0 * P2 - P3) * t
+                        + 3.0 * (-P0 + 3.0 * P1 - 3.0 * P2 + P3) * t2)
+    return out
+
+
+def _camplot_parse_point(text, default=(0.0, 0.0, 1.0)):
+    """Parse the ``look_at_target`` widget: a single 'x, y, z' point.
+
+    Lenient like the anchor parser -- blank/unparsable falls back to ``default``
+    rather than raising, since the target may simply not have been set yet (mirrors
+    the editor's own fallback for an empty target widget in camera_plot_geo.js).
+    """
+    import numpy as np
+    t = (text or "").strip()
+    if t:
+        parts = [p for p in t.replace(",", " ").split() if p != ""]
+        if len(parts) == 3:
+            try:
+                return np.array([float(p) for p in parts], dtype=np.float64)
+            except ValueError:
+                pass
+    return np.array(default, dtype=np.float64)
+
+
+def _camplot_c2w_stack(positions, mode, target=None, anchors=None):
     """Per-frame camera-to-world 4x4 matrices for the splined positions.
 
     Columns of the 3x3 rotation are the camera axes in world: [right, up, fwd]
     (matching nvrender's generate_rail, which stacks [x_axis, y_axis, z_axis]).
     Orientation modes:
       * look_forward   : camera +Z follows the path tangent (cinematic fly-through).
-      * look_at_target : camera +Z points at a fixed world ``target`` point.
-      * fixed_forward  : identity rotation, camera always faces +Z (fusion-style,
-                         maximises equirect coverage like the bf_* rails).
-    A stable world up (+Y) with Gram-Schmidt builds the frame; a near-vertical
-    forward falls back to a +Z up, and a degenerate (zero-length) tangent reuses
-    the previous frame's orientation.
+                         ``anchors`` -- the render-frame anchor points ``positions``
+                         was splined from -- lets this use the EXACT analytic spline
+                         tangent (_camplot_catmull_rom_tangent) instead of a finite
+                         difference of ``positions``; falls back to np.gradient when
+                         anchors isn't given.
+      * look_at_target : camera +Z points at a fixed world ``target`` point. This is
+                         the "look at point" mode offered in the orientation dropdown
+                         (it replaced fixed_forward there -- see below).
+      * per_point_look : camera +Z points at a per-FRAME ``target`` stack (already
+                         splined by the caller; each frame aims at its own point).
+      * fixed_forward  : identity rotation, camera always faces +Z. No longer offered
+                         in the orientation dropdown (look_at_target replaced it), but
+                         kept here so a workflow saved before that change still renders
+                         exactly as it did -- widgets_values is a plain string, and an
+                         old save still carries "fixed_forward" there.
+    A stable world up (+Y) with Gram-Schmidt builds the frame. A near-vertical forward
+    makes cross(world_up, z) degenerate; rather than swap to a DIFFERENT up reference
+    there (the old behaviour), the previous frame's right axis is carried across
+    (parallel-transport style) so the roll stays continuous through the singularity
+    instead of visibly flipping. A degenerate (zero-length) tangent reuses the
+    previous frame's orientation outright.
     """
     import numpy as np
     T = positions.shape[0]
     c2w = np.tile(np.eye(4, dtype=np.float64), (T, 1, 1))
     c2w[:, :3, 3] = positions
     if mode == "fixed_forward":
-        return c2w                                  # identity rotation, +Z heading
+        return c2w                                  # identity rotation, +Z heading (legacy)
 
     if mode == "per_point_look":
         # ``target`` is a per-FRAME (T,3) target stack (already splined); each frame
@@ -164,25 +234,38 @@ def _camplot_c2w_stack(positions, mode, target=None):
             target = np.array([0.0, 0.0, 1.0])
         fwd = np.asarray(target, dtype=np.float64)[None, :] - positions
     else:                                           # look_forward
-        fwd = np.gradient(positions, axis=0) if T > 1 else \
-            np.tile(np.array([0.0, 0.0, 1.0]), (T, 1))
+        if anchors is not None and np.asarray(anchors).shape[0] >= 2:
+            fwd = _camplot_catmull_rom_tangent(anchors, T)      # exact spline tangent
+        elif T > 1:
+            fwd = np.gradient(positions, axis=0)     # no anchors given -- discrete fallback
+        else:
+            fwd = np.tile(np.array([0.0, 0.0, 1.0]), (T, 1))
 
     world_up = np.array([0.0, 1.0, 0.0])
     prev_z = np.array([0.0, 0.0, 1.0])
+    prev_x = np.array([1.0, 0.0, 0.0])
     for i in range(T):
         f = fwd[i]
         n = np.linalg.norm(f)
         z = f / n if n > 1e-8 else prev_z          # degenerate tangent -> reuse
-        up = world_up if abs(float(np.dot(world_up, z))) < 0.999 \
-            else np.array([0.0, 0.0, 1.0])
-        x = np.cross(up, z)
+        x = np.cross(world_up, z)
         xn = np.linalg.norm(x)
-        x = x / xn if xn > 1e-8 else np.array([1.0, 0.0, 0.0])
+        if xn > 5e-2:                               # ordinary case: world up is usable
+            x = x / xn
+        else:
+            # Near-vertical forward: cross(world_up, z) degenerates. Re-orthogonalise
+            # the PREVIOUS frame's right axis against the new z instead of jumping to
+            # the old [0,0,1]-up fallback -- that jump swaps the whole basis to a
+            # different reference and reads as a sudden roll snap the instant the path
+            # crosses near-vertical (the main source of look_forward's jitter).
+            x = prev_x - z * np.dot(prev_x, z)
+            xn2 = np.linalg.norm(x)
+            x = x / xn2 if xn2 > 1e-8 else prev_x
         y = np.cross(z, x)
         c2w[i, :3, 0] = x
         c2w[i, :3, 1] = y
         c2w[i, :3, 2] = z
-        prev_z = z
+        prev_z, prev_x = z, x
     return c2w
 
 
@@ -286,9 +369,11 @@ class CameraPlotRenderControlGeo:
 
     ORIENTATION:
       * look_forward   (default) -- camera faces the path tangent (cinematic).
-      * fixed_forward            -- identity heading (+Z); best equirect coverage.
-      * per_point_look           -- each anchor carries its own draggable look target;
-                                    the aim sweeps smoothly between them.
+      * look_at_target -- every frame aims at ONE shared world point (the
+                          look_at_target widget / the draggable orange "look" marker
+                          in the editor). Replaces the old fixed_forward option.
+      * per_point_look -- each anchor carries its own draggable look target; the aim
+                          sweeps smoothly between them.
     """
 
     @classmethod
@@ -304,12 +389,14 @@ class CameraPlotRenderControlGeo:
                                "camera. The camera goes EXACTLY to each point you place against the "
                                "cloud (WYSIWYG). One 'x,y,z' per line, or JSON "
                                "[[x,y,z],...]. Need at least 2 points."}),
-                "orientation": (["look_forward", "fixed_forward", "per_point_look"],
+                "orientation": (["look_forward", "look_at_target", "per_point_look"],
                     {"default": "look_forward",
                      "tooltip": "look_forward = camera faces the path tangent (default). "
-                                "fixed_forward = always +Z heading. per_point_look = each anchor "
-                                "has its own draggable look target; the aim sweeps between them "
-                                "(set the target interactively in the editor)."}),
+                                "look_at_target = every frame aims at the SAME shared point -- "
+                                "set it in the look_at_target widget or drag the orange 'look' "
+                                "marker in the editor. per_point_look = each anchor has its own "
+                                "draggable look target; the aim sweeps between them (set the "
+                                "target interactively in the editor)."}),
                 "length": ("INT", {"default": 81, "min": 9, "max": 257, "step": 4,
                     "tooltip": "Number of frames. MUST match the Wan Conditioning length (81)."}),
                 # Geometry detail. This REPLACES the old point_budget widget IN PLACE (same
@@ -331,6 +418,13 @@ class CameraPlotRenderControlGeo:
                                "output folder."}),
                 "moge_ckpt": _moge_ckpt_input(),
                 "moge_model": _moge_model_input(),
+                # Appended LAST: a new widget must land after every pre-existing one so a
+                # saved graph's widgets_values (positional) doesn't shift out of alignment.
+                "look_at_target": ("STRING", {"default": "0, 0, 3",
+                    "tooltip": "The single world point ALL frames aim at when orientation = "
+                               "look_at_target. 'x, y, z' in the SAME literal units as the "
+                               "anchors / geometry overlay. Draggable in the editor (the "
+                               "orange 'look' marker). Ignored by the other orientation modes."}),
             },
             # The graph node id, so each Camera Plot's rail gets its own filename even
             # when several plots share a dataset_dir. Naming the rail on anything less
@@ -352,7 +446,7 @@ class CameraPlotRenderControlGeo:
     def render(self, panorama, anchors, orientation, length,
                moge_level=6,
                dataset_dir="", moge_ckpt=_MOGE_AUTO, moge_model=None, unique_id=None,
-               point_budget=None):
+               point_budget=None, look_at_target=""):
         # moge_level occupies the slot the removed point_budget widget used. A graph saved
         # before this change still carries its old point_budget value (500-40000) here, and
         # anything outside 0-9 is that migrated value, not a real level -> snap to default 6.
@@ -394,6 +488,13 @@ class CameraPlotRenderControlGeo:
         render_pts = anchor_pts.copy()
         render_pts[:, 1] *= -1.0
         render_target = None
+        # Editor-frame (+Y up) copy of the look-at point, kept around only for the
+        # matplotlib preview marker below (which draws in the editor frame).
+        target_editor = None
+        if orientation == "look_at_target":
+            target_editor = _camplot_parse_point(look_at_target)
+            render_target = target_editor.copy()
+            render_target[1] *= -1.0
 
         # --- spline the anchors -> per-frame positions -> w2c rail -----------
         positions = _camplot_catmull_rom(render_pts, int(length))   # (T,3) render frame
@@ -406,7 +507,11 @@ class CameraPlotRenderControlGeo:
             per_frame_targets = _camplot_catmull_rom(tgt_render, int(length))  # (T,3)
             c2w = _camplot_c2w_stack(positions, "per_point_look", per_frame_targets)
         else:
-            c2w = _camplot_c2w_stack(positions, orientation, render_target)  # (T,4,4)
+            # anchors=render_pts lets look_forward use the exact analytic spline
+            # tangent instead of a finite difference of the sampled positions; the
+            # other modes here (look_at_target, legacy fixed_forward) ignore it.
+            c2w = _camplot_c2w_stack(positions, orientation, render_target,
+                                     anchors=render_pts)              # (T,4,4)
         w2c = np.linalg.inv(c2w)                                     # render rail
 
         # Persist the rail as a plain nested-list JSON; nvrender.load_rail reads it
@@ -470,7 +575,7 @@ class CameraPlotRenderControlGeo:
         positions_view = positions.copy()
         positions_view[:, 1] *= -1.0
         try:
-            prev = _camplot_preview(positions_view, anchor_pts, orientation, None)
+            prev = _camplot_preview(positions_view, anchor_pts, orientation, target_editor)
         except Exception as e:
             print(f"[CameraPlot] preview render failed ({e}); returning blank preview.")
             prev = np.zeros((64, 64, 3), dtype=np.float32)

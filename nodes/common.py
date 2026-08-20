@@ -146,6 +146,19 @@ class DatasetProject:
     (<comfy_output>/<dataset_name>/) with the standard subfolders, and hands its
     path (``dataset_dir``) to every other node so the whole pipeline stays in one
     place -- no more output_name string-matching.
+
+    Subfolder layout (as of the ``camera_plot`` / ``wan_inpaint`` rename):
+      * ``camera_plot/`` -- the camera-plot render control videos (control_rgb /
+        control_mask -- the render WITH the black unseen-geometry holes, used as WAN's
+        conditioning input). Was named ``dataset/`` in older releases -- misleading,
+        since it is NOT the trainable splat dataset, just WAN's conditioning input.
+      * ``wan_inpaint/`` -- for a completed/inpainted WAN video, if your workflow saves
+        one (wire ``wan_inpaint_prefix`` into a Save Video node's filename_prefix).
+      * ``condition/`` -- cameras.npz + depth/mask sidecars.
+      * ``_work/`` -- camera-plot rail JSONs.
+    The actual splat-ready COLMAP dataset (``images/`` + ``sparse/0/``) is written at
+    the PROJECT ROOT by the SphereSfM nodes, i.e. sibling to these, not inside any of
+    them -- that root is the real "dataset".
     """
 
     @classmethod
@@ -161,8 +174,9 @@ class DatasetProject:
             },
         }
 
-    RETURN_TYPES = ("STRING", "STRING", "STRING")
-    RETURN_NAMES = ("dataset_dir", "control_rgb_prefix", "control_mask_prefix")
+    RETURN_TYPES = ("STRING", "STRING", "STRING", "STRING")
+    RETURN_NAMES = ("dataset_dir", "control_rgb_prefix", "control_mask_prefix",
+                    "wan_inpaint_prefix")
     FUNCTION = "make"
     CATEGORY = "SplatKit"
 
@@ -171,16 +185,20 @@ class DatasetProject:
         base = _p2s_output_base(dataset_name)
         if reset:
             shutil.rmtree(base, ignore_errors=True)
-        for sub in ("condition", "dataset", "_work"):
+        for sub in ("condition", "camera_plot", "wan_inpaint", "_work"):
             os.makedirs(os.path.join(base, sub), exist_ok=True)
         print(f"[DatasetProject] {base}")
-        # filename_prefix values for VHS_VideoCombine: relative to ComfyUI's output
-        # dir, so the control videos land in <dataset_name>/dataset/ named exactly
-        # control_rgb / control_mask (no p2s_ prefix).
+        # filename_prefix values for VHS_VideoCombine / SaveVideo: relative to ComfyUI's
+        # output dir. control_rgb/control_mask (the camera-plot render, used as WAN's
+        # conditioning) land in <dataset_name>/camera_plot/; a completed WAN video (if a
+        # workflow saves one) goes in <dataset_name>/wan_inpaint/ -- both named plainly,
+        # no p2s_ prefix. "dataset/" is retired as a subfolder name so it stops implying
+        # these ARE the trainable dataset -- that lives at the project root (see class doc).
         name = dataset_name or "default"
-        rgb_prefix = f"{name}/dataset/control_rgb"
-        mask_prefix = f"{name}/dataset/control_mask"
-        return (base, rgb_prefix, mask_prefix)
+        rgb_prefix = f"{name}/camera_plot/control_rgb"
+        mask_prefix = f"{name}/camera_plot/control_mask"
+        wan_prefix = f"{name}/wan_inpaint/wan_video"
+        return (base, rgb_prefix, mask_prefix, wan_prefix)
 
 
 def _resolve_existing_dataset(name_or_dir):

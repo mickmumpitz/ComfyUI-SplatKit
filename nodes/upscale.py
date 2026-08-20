@@ -1669,6 +1669,19 @@ class SphereSfMDatasetDualRes:
                     "tooltip": "hires_manifest for pano_frames_3."}),
                 "hires_4": ("STRING", {"forceInput": True,
                     "tooltip": "hires_manifest for pano_frames_4."}),
+                "cleanup_hires_source": ("BOOLEAN", {"default": False,
+                    "tooltip": "After SfM succeeds, DELETE each consumed hi-res equirect "
+                               "(the HiRes Composite's frames/*.png, several GB per "
+                               "trajectory) from its ORIGINAL folder -- only once a byte-"
+                               "identical-size copy has been confirmed staged in this "
+                               "dataset's _spheresfm_work/equirect_hires (what repair/re-"
+                               "reprojection actually read from). OFF (default): keep "
+                               "everything, nothing is deleted -- safest, and required if "
+                               "you plan to re-run this node with a different frame_stride/ "
+                               "max_frames (a wider selection needs files this pass didn't "
+                               "keep). ON: frees the frames/ folder's disk once you're done "
+                               "iterating on THIS dataset. Only files this run actually used "
+                               "are touched; nothing outside hires_dir is ever removed."}),
             },
         }
 
@@ -1686,7 +1699,8 @@ class SphereSfMDatasetDualRes:
             init_min_tri_angle=4.0, init_min_num_inliers=30, init_max_forward_motion=1.0,
             image_order="camera_major", hires_glob="*.png",
             frame_stride=1, max_frames=0,
-            hires_1=None, hires_2=None, hires_3=None, hires_4=None):
+            hires_1=None, hires_2=None, hires_3=None, hires_4=None,
+            cleanup_hires_source=False):
         import glob
         import numpy as np
         import torch
@@ -1812,7 +1826,39 @@ class SphereSfMDatasetDualRes:
               f"{res['num_points']} points ({res['num_models']} model(s)) -> {res['model_dir']}\n"
               f"  Standard COLMAP pinhole dataset -- train with any 3DGS trainer "
               f"(point it at the dataset above).")
+
+        if cleanup_hires_source and hires_paths:
+            self._cleanup_hires_source(hires_paths, work_dir)
         return (res["model_dir"], res["num_images"], res["num_points"])
+
+    @staticmethod
+    def _cleanup_hires_source(hires_paths, work_dir):
+        """Delete each consumed hi-res equirect from its ORIGINAL folder (typically the
+        HiRes Composite's frames/), but ONLY once a same-size copy is confirmed staged in
+        this dataset's _spheresfm_work/equirect_hires -- run_spheresfm_dualres's own
+        reprojection source, so its presence there (with the right byte size) is proof the
+        file this run needed is safe. Never touches anything outside the exact paths this
+        run itself resolved and staged; any mismatch just skips that file and says why."""
+        equ_hi = os.path.join(work_dir, "equirect_hires")
+        removed, skipped = 0, 0
+        for i, src in enumerate(hires_paths):
+            staged = os.path.join(equ_hi, "frame_%05d.png" % i)
+            try:
+                if (os.path.isfile(staged) and os.path.isfile(src)
+                        and os.path.getsize(staged) == os.path.getsize(src)):
+                    os.remove(src)
+                    removed += 1
+                else:
+                    skipped += 1
+            except OSError as e:
+                print(f"[DualResSfM] cleanup_hires_source: could not remove {src}: {e}")
+                skipped += 1
+        print(f"[DualResSfM] cleanup_hires_source: removed {removed}/{len(hires_paths)} "
+              f"source hi-res equirect(s)"
+              + (f" ({skipped} left in place -- no verified staged copy found)."
+                 if skipped else ".")
+              + " Re-running this node with a wider frame_stride/max_frames needs files "
+                "that were consumed here, so keep cleanup off until you're done iterating.")
 
 
 class SphereSfMAddToDatasetDualRes:

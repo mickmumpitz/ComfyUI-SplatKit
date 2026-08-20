@@ -506,7 +506,7 @@ def run_composite(src_hi, pano_geo, rail, out_dir, wan=None, out_w=8192,
                   upscale=None, proxy_width=2048, name_prefix="", device="cuda",
                   moge_kwargs=None, params=None, log=print, progress=None,
                   depth_grid="geometry_res", prefetch=True, debug_save="off",
-                  profile=None, semantic=None):
+                  profile=None, semantic=None, save_proxies=True):
     """Composite one trajectory. Writes hi-res PNGs; returns proxies + a report.
 
     src_hi     : [H, W, 3] uint8 -- the ORIGINAL high-resolution panorama (8K).
@@ -528,6 +528,12 @@ def run_composite(src_hi, pano_geo, rail, out_dir, wan=None, out_w=8192,
                  wan wired to be useful.
     depth      : optional precomputed [h, w] float32 equirect depth; else MoGe runs.
     upscale    : callable(uint8 HxWx3) -> uint8, or None (bicubic).
+    save_proxies : write the downscaled proxy PNGs to ``out_dir/proxies/`` (default True,
+                 matching every prior release). The proxy tensor is ALWAYS returned in
+                 ``proxies`` regardless -- that is what feeds ``pano_frames_*`` downstream --
+                 so the on-disk copy is pure convenience (inspection/debugging); nothing in
+                 this pack re-reads proxies/ by path. Set False to skip writing ~400 MB-2 GB
+                 of PNGs per trajectory that nothing downstream needs.
     debug_save : which intermediate stages of the hole fill to also write to disk, under
                  ``out_dir/debug/``. "off", "wan", "wan+upscaled" or "wan+upscaled+fill".
                  The composite alone cannot tell you WHERE softness came from -- the WAN
@@ -1014,8 +1020,9 @@ def run_composite(src_hi, pano_geo, rail, out_dir, wan=None, out_w=8192,
                 manifest.append({"frame": int(fi), "file": f"frames/{fname}",
                                  "coverage": round(float(cover[-1]), 4),
                                  "w2c": np.asarray(rail[fi]).tolist()})
-                with prof.t("write_queue"):
-                    writer.save(os.path.join(proxy_dir, fname), prox)
+                if save_proxies:
+                    with prof.t("write_queue"):
+                        writer.save(os.path.join(proxy_dir, fname), prox)
                 proxies.append(prox)
                 gates.append(gate_small)
                 del comp

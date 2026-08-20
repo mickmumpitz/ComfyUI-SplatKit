@@ -217,8 +217,14 @@ def main():
     os.makedirs(sparse_dir, exist_ok=True)
 
     write_cameras_bin(os.path.join(sparse_dir, "cameras.bin"), cams)
+    # images.bin / points3D.bin are copied VERBATIM (only cameras.bin's contents change),
+    # so hardlink them like the panoramas below instead of a real byte-for-byte copy --
+    # same rationale, same ~0 extra bytes on a filesystem that supports it.
     for b in ("images.bin", "points3D.bin"):
-        shutil.copyfile(os.path.join(model_dir, b), os.path.join(sparse_dir, b))
+        dst = os.path.join(sparse_dir, b)
+        if os.path.exists(dst):
+            os.remove(dst)
+        link_or_copy(os.path.join(model_dir, b), dst)
     print("wrote  : %s" % sparse_dir)
 
     modes = {"link": 0, "copy": 0}

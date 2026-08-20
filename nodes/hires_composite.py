@@ -321,6 +321,14 @@ class HiResComposite:
                                "and you never set an index by hand. The SphereSfM nodes read "
                                "the hires_manifest, so the name itself is irrelevant to them. "
                                "OFF (default): use traj_index, exactly as before."}),
+                "save_proxies": ("BOOLEAN", {"default": True,
+                    "tooltip": "Write the downscaled proxy PNGs to <set_name>/proxies/. "
+                               "ON (default, unchanged behaviour): keep them on disk -- handy "
+                               "to eyeball what SfM is posing on. OFF: skip writing them "
+                               "(saves several hundred MB - a few GB per trajectory). Safe "
+                               "either way: the proxy_frames OUTPUT is always populated and "
+                               "is what actually feeds pano_frames_* downstream -- nothing in "
+                               "this pack re-reads proxies/ off disk."}),
             },
             "hidden": {"unique_id": "UNIQUE_ID"},
         }
@@ -338,7 +346,7 @@ class HiResComposite:
             depth_grid="geometry_res", moge_ckpt=_MOGE_AUTO, rho_hi=4.0, tone_work=1024,
             prefetch=True, save_video=False, debug_save="off", gate_mode="hard_soft_edge",
             tone_mode="luma", moge_model=None, semantic_pano=None,
-            auto_name=False, unique_id=None):
+            auto_name=False, unique_id=None, save_proxies=True):
         import glob as _glob
         import json as _json
         import time
@@ -391,7 +399,8 @@ class HiResComposite:
             params=dict(geom_scale=int(geom_scale), rho_hi=float(rho_hi),
                         tone_work=int(tone_work), tone_mode=tone_mode,
                         gate_mode=gate_mode),
-            debug_save=debug_save, progress=progress, semantic=sem)
+            debug_save=debug_save, progress=progress, semantic=sem,
+            save_proxies=bool(save_proxies))
         dt = time.perf_counter() - t0
 
         if save_video:

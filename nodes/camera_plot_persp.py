@@ -81,6 +81,7 @@ from .camera_plot import (
     _camplot_catmull_rom,
     _camplot_fill_targets,
     _camplot_parse_anchors_ext,
+    _camplot_parse_point,
     _write_scene_reference,
 )
 from .common import (
@@ -169,13 +170,15 @@ def _frustum_rays(fwd, hfov, vfov):
 # --------------------------------------------------------------------------- #
 # Path preview (matplotlib, server-side) -- like camera_plot's, plus the lens   #
 # --------------------------------------------------------------------------- #
-def _preview_lens(positions, anchors, fwd, mode, hfov, vfov, label):
+def _preview_lens(positions, anchors, fwd, mode, hfov, vfov, label, target=None):
     """Top-down (X-Z) + side (Z-Y) plot of the path WITH the framing wedges.
 
     Same two views and conventions as ``camera_plot._camplot_preview`` (editor frame,
     +Y up), with the actual horizontal / vertical field of view drawn as a shaded wedge
     at the start, middle and end of the path -- so "will this lens see the whole room"
-    is answerable before committing to a render. Returns (H, W, 3) float in [0, 1].
+    is answerable before committing to a render. ``target`` (editor frame) draws the
+    look_at_target marker, mirroring the equirect node's preview. Returns (H, W, 3)
+    float in [0, 1].
     """
     from matplotlib.figure import Figure
     from matplotlib.backends.backend_agg import FigureCanvasAgg
@@ -213,6 +216,9 @@ def _preview_lens(positions, anchors, fwd, mode, hfov, vfov, label):
                         xytext=(5, 5), fontsize=8, color="#dd3333")
         ax.scatter([positions[0, ai]], [positions[0, bi]], c="#0066ff", s=160,
                    marker="*", zorder=6, label="start")
+        if mode == "look_at_target" and target is not None:
+            ax.scatter([target[ai]], [target[bi]], c="#ff9900", s=120,
+                       marker="X", zorder=6, label="look-at target")
         ax.set_xlabel(xlabel)
         ax.set_ylabel(ylabel)
         ax.set_title(title)
@@ -247,7 +253,9 @@ class CameraPlotFlythroughPersp:
 
     ORIENTATION:
       * look_forward   -- camera faces the path tangent (cinematic default).
-      * fixed_forward  -- heading locked to the pano centre (+Z); pure dolly, least tearing.
+      * look_at_target -- every frame aims at ONE shared world point (the
+                          look_at_target widget / the draggable orange "look" marker).
+                          Replaces the old fixed_forward option.
       * per_point_look -- each anchor carries a draggable look target; the aim sweeps
                           smoothly between them. This is how you pan onto a subject.
 
@@ -283,13 +291,14 @@ class CameraPlotFlythroughPersp:
                                "per line, or JSON [[x,y,z],...]; 6 numbers adds a per-anchor "
                                "look target. Need at least 2 points. Keep moves SMALL -- a "
                                "single pano only holds so much parallax."}),
-                "orientation": (["look_forward", "fixed_forward", "per_point_look"],
+                "orientation": (["look_forward", "look_at_target", "per_point_look"],
                     {"default": "look_forward",
-                     "tooltip": "look_forward = camera faces the path tangent. fixed_forward = "
-                                "heading locked to the pano centre (pure dolly, least tearing). "
-                                "per_point_look = each anchor has its own draggable look target "
-                                "and the aim sweeps between them. Unlike the equirect node the "
-                                "camera is NOT re-aimed at the pano centre on frame 0 -- it "
+                     "tooltip": "look_forward = camera faces the path tangent. look_at_target = "
+                                "every frame aims at the SAME shared point -- set it in the "
+                                "look_at_target widget or drag the orange 'look' marker in the "
+                                "editor. per_point_look = each anchor has its own draggable look "
+                                "target and the aim sweeps between them. Unlike the equirect node "
+                                "the camera is NOT re-aimed at the pano centre on frame 0 -- it "
                                 "looks exactly where the editor's heading arrow points."}),
                 "length": ("INT", {"default": 81, "min": 1, "max": 513,
                     "tooltip": "Frames along the path. 1 = a single still at the first anchor. "
@@ -349,6 +358,13 @@ class CameraPlotFlythroughPersp:
                                "instead of under output_name."}),
                 "moge_ckpt": _moge_ckpt_input(),
                 "moge_model": _moge_model_input(),
+                # Appended LAST: a new widget must land after every pre-existing one so a
+                # saved graph's widgets_values (positional) doesn't shift out of alignment.
+                "look_at_target": ("STRING", {"default": "0, 0, 0.8",
+                    "tooltip": "The single world point ALL frames aim at when orientation = "
+                               "look_at_target. 'x, y, z' in the SAME literal units as the "
+                               "anchors / geometry overlay. Draggable in the editor (the "
+                               "orange 'look' marker). Ignored by the other orientation modes."}),
             },
         }
 
@@ -362,7 +378,7 @@ class CameraPlotFlythroughPersp:
                focal_mm, sensor_width_mm, edge_mode, point_budget=4000,
                mesh_width="2048", edge_rtol=0.05, bg_extend_px=24, moge_level=9,
                merge_long=1920, output_name="comfy_camplot_persp", dataset_dir="",
-               moge_ckpt=_MOGE_AUTO, moge_model=None):
+               moge_ckpt=_MOGE_AUTO, moge_model=None, look_at_target=""):
         import time
         import cv2
         from ..shim import nvdiffrast_shim as dr
@@ -435,13 +451,23 @@ class CameraPlotFlythroughPersp:
         pts_r = pts.copy()
         pts_r[:, 1] *= -1.0                                      # editor +Y up -> world +Y down
         positions = _camplot_catmull_rom(pts_r, length) if length > 1 else pts_r[:1]
+        # Editor-frame (+Y up) copy of the look-at point, kept for the preview marker.
+        target_editor = None
         if orientation == "per_point_look":
             tgt_r = _camplot_fill_targets(pts, tgts).copy()
             tgt_r[:, 1] *= -1.0
             per_frame = _camplot_catmull_rom(tgt_r, length) if length > 1 else tgt_r[:1]
             c2w = _camplot_c2w_stack(positions, "per_point_look", per_frame)
         else:
-            c2w = _camplot_c2w_stack(positions, orientation, None)
+            render_target = None
+            if orientation == "look_at_target":
+                target_editor = _camplot_parse_point(look_at_target)
+                render_target = target_editor.copy()
+                render_target[1] *= -1.0
+            # anchors=pts_r lets look_forward use the exact analytic spline tangent
+            # instead of a finite difference of the sampled positions; the other modes
+            # here (look_at_target, legacy fixed_forward) ignore it.
+            c2w = _camplot_c2w_stack(positions, orientation, render_target, anchors=pts_r)
         # Used as-is: anchor (0,0,0) IS the panorama's camera, and the heading is the one
         # the editor draws. See the module docstring for why frame 0 is not normalised.
         w2c = torch.from_numpy(np.linalg.inv(c2w)).float().to(dev)      # [T,4,4]
@@ -538,7 +564,7 @@ class CameraPlotFlythroughPersp:
         fwd_view[:, 1] *= -1.0
         try:
             prev = _preview_lens(pos_view, pts, fwd_view, orientation, hfov, vfov,
-                                 lens_label)
+                                 lens_label, target_editor)
         except Exception as e:
             print(f"[CamPlotPersp] preview render failed ({e}); returning blank preview.")
             prev = np.zeros((64, 64, 3), dtype=np.float32)

@@ -145,13 +145,62 @@ function catmullRom(anchors, n) {
   return out;
 }
 
+// Analytic Catmull-Rom tangent (dP/du) -- mirrors _camplot_catmull_rom_tangent in
+// camera_plot.py exactly (same P0..P3, k, t as catmullRom() above, just differentiated
+// w.r.t. t). Differentiating the exact cubic instead of finite-differencing the
+// SAMPLED positions is what keeps the editor's look_forward arrows as smooth as the
+// underlying curve -- a discrete difference of the samples is only as smooth as the
+// sampling, so uneven anchor spacing shows up as heading noise between frames.
+function catmullRomTangent(anchors, n) {
+  const N = anchors.length;
+  const nSamples = Math.max(1, n | 0);
+  if (N === 2) {
+    const d = sub(anchors[1], anchors[0]);
+    return Array.from({ length: nSamples }, () => d.slice());
+  }
+  const p0 = [
+    2 * anchors[0][0] - anchors[1][0],
+    2 * anchors[0][1] - anchors[1][1],
+    2 * anchors[0][2] - anchors[1][2],
+  ];
+  const pn = [
+    2 * anchors[N - 1][0] - anchors[N - 2][0],
+    2 * anchors[N - 1][1] - anchors[N - 2][1],
+    2 * anchors[N - 1][2] - anchors[N - 2][2],
+  ];
+  const ext = [p0, ...anchors, pn];
+  const out = [];
+  for (let j = 0; j < nSamples; j++) {
+    const u = nSamples === 1 ? 0 : (j * (N - 1)) / (nSamples - 1);
+    const k = Math.min(Math.floor(u), N - 2);
+    const t = u - k;
+    const t2 = t * t;
+    const P0 = ext[k], P1 = ext[k + 1], P2 = ext[k + 2], P3 = ext[k + 3];
+    const d = [0, 0, 0];
+    for (let c = 0; c < 3; c++) {
+      d[c] = 0.5 * (
+        (-P0[c] + P2[c]) +
+        2 * (2 * P0[c] - 5 * P1[c] + 4 * P2[c] - P3[c]) * t +
+        3 * (-P0[c] + 3 * P1[c] - 3 * P2[c] + P3[c]) * t2
+      );
+    }
+    out.push(d);
+  }
+  return out;
+}
+
 // Per-sample heading DIRECTION (unit) -- mirrors _camplot_c2w_stack's forward axis.
-function headings(positions, mode, target) {
+// ``anchors`` (the raw control points ``positions`` was splined from) lets look_forward
+// use the exact analytic tangent above instead of a finite difference of ``positions``.
+function headings(positions, mode, target, anchors) {
   const T = positions.length;
   const norm = (v) => {
     const n = Math.hypot(v[0], v[1], v[2]);
     return n > 1e-8 ? [v[0] / n, v[1] / n, v[2] / n] : null;
   };
+  const tangents = (mode !== "fixed_forward" && mode !== "look_at_target" &&
+                    anchors && anchors.length >= 2 && T > 0)
+    ? catmullRomTangent(anchors, T) : null;
   const out = [];
   let prev = [0, 0, 1];
   for (let i = 0; i < T; i++) {
@@ -160,17 +209,17 @@ function headings(positions, mode, target) {
       f = [0, 0, 1];
     } else if (mode === "look_at_target") {
       const tgt = target || [0, 0, 1];
-      f = [tgt[0] - positions[i][0], tgt[1] - positions[i][1], tgt[2] - positions[i][2]];
+      f = sub(tgt, positions[i]);
+    } else if (tangents) {
+      f = tangents[i];
+    } else if (T < 2) {
+      f = [0, 0, 1];
+    } else if (i === 0) {
+      f = sub(positions[1], positions[0]);
+    } else if (i === T - 1) {
+      f = sub(positions[T - 1], positions[T - 2]);
     } else {
-      if (T < 2) {
-        f = [0, 0, 1];
-      } else if (i === 0) {
-        f = sub(positions[1], positions[0]);
-      } else if (i === T - 1) {
-        f = sub(positions[T - 1], positions[T - 2]);
-      } else {
-        f = scale(sub(positions[i + 1], positions[i - 1]), 0.5);
-      }
+      f = scale(sub(positions[i + 1], positions[i - 1]), 0.5);
     }
     const u = norm(f) || prev;
     out.push(u);
@@ -628,7 +677,7 @@ class CamPlotGeoEditor {
         return n > 1e-8 ? [d[0] / n, d[1] / n, d[2] / n] : [0, 0, 1];
       });
     } else {
-      head = headings(positions, mode, target);
+      head = headings(positions, mode, target, this.points);
     }
 
     if (this._frozenFit) {
