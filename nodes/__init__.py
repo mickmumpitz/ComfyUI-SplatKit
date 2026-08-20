@@ -14,6 +14,7 @@ ComfyUI tensors, and calls the engine. Grouped by pipeline stage:
     hires_composite.py  reproject the ORIGINAL 8K pano into the WAN frames
     upscale.py        dataset upscaling add-on
     repair.py         rebuild sparse/0 from the SfM scratch dir
+    frame_repair.py   select + write back Qwen-repaired cube faces
     i2p.py            image-to-pano front end (workflow 0)
 
 Each module owns its own NODE_CLASS_MAPPINGS; this file merges them. A module that
@@ -39,6 +40,7 @@ _MODULES = [
     ("hires_composite", "hires composite node"),
     ("upscale", "upscale nodes"),
     ("repair", "rebuild-sparse node"),
+    ("frame_repair", "frame-repair nodes"),
     ("i2p", "image-to-pano nodes"),
 ]
 
