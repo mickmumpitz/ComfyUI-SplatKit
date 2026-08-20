@@ -1100,6 +1100,17 @@ def add_to_spheresfm(frames, dataset_dir, exe_path="",
     first_new = existing_idx[-1] + 1
     base_n_frames = len(existing_idx)
     h, w = frames.shape[1:3]
+    # Validate the new frames match the SfM grid BEFORE writing anything. Features are
+    # matched against a database extracted at that grid, so a mismatched frame can never
+    # register anyway; checking up front means a wrong proxy_width fails cleanly instead
+    # of leaving stray frames in equirect_lowres that miscount the base on the next add.
+    if dual and (w, h) != tuple(lo_grid):
+        raise RuntimeError(
+            "[SphereSfM/add] the new frames are %dx%d but this dataset's SfM grid is "
+            "%dx%d. Features are matched against a database extracted at the SfM grid, "
+            "so the new frames must be the SAME size as the ones the base run posed -- "
+            "wire the HiRes Composite's proxy_frames (and give it the same proxy_width "
+            "the base trajectories used)." % (w, h, lo_grid[0], lo_grid[1]))
     new_names = []
     for i, fr in enumerate(frames):
         nm = "frame_%05d.png" % (first_new + i)
@@ -1110,13 +1121,7 @@ def add_to_spheresfm(frames, dataset_dir, exe_path="",
           % (num_added, w, h, new_names[0], new_names[-1], equ_dir))
 
     if dual:
-        if (w, h) != tuple(lo_grid):
-            raise RuntimeError(
-                "[SphereSfM/add] the new frames are %dx%d but this dataset's SfM grid is "
-                "%dx%d. Features are matched against a database extracted at the SfM grid, "
-                "so the new frames must be the SAME size as the ones the base run posed -- "
-                "wire the HiRes Composite's proxy_frames (and give it the same proxy_width "
-                "the base trajectories used)." % (w, h, lo_grid[0], lo_grid[1]))
+        # (low-res grid already validated up front, before any frames were written)
         # Stage the matching hi-res equirects under the SAME frame numbers, so step 6 can
         # reproject the whole extended model -- old and new frames alike -- from 8K.
         from PIL import Image as _PILImage
