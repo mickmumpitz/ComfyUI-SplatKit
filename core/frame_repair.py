@@ -413,15 +413,17 @@ def repaired_dir_for(dataset_dir):
     return os.path.join(dataset_dir, "repaired_frames")
 
 
-def write_repaired(dataset_dir, image_dir, name, tensor, write_mode="backup_and_replace"):
+def write_repaired(dataset_dir, image_dir, name, tensor, write_mode="backup_and_replace",
+                   out_subdir="repaired_frames"):
     """Write one repaired frame.
 
     ``backup_and_replace`` -- copy the original ``images/<name>`` into
     ``images_repair_backup/`` (once), then overwrite ``images/<name>`` with the
     repaired frame RESIZED to the original's exact dimensions (so the COLMAP camera's
     intrinsics stay valid).
-    ``folder_only`` -- write the repaired frame to ``<dataset>/repaired_frames/<name>``
-    at the original's dimensions and leave the dataset untouched.
+    ``folder_only`` -- write the repaired frame to ``<dataset>/<out_subdir>/<name>``
+    at the original's dimensions and leave the dataset untouched. ``out_subdir`` lets
+    different backends (qwen / seedvr2 / supir) write to separate folders for an A/B.
 
     Returns the path written.
     """
@@ -441,7 +443,8 @@ def write_repaired(dataset_dir, image_dir, name, tensor, write_mode="backup_and_
         arr = cv2.resize(arr, (ow, oh), interpolation=cv2.INTER_LANCZOS4)
 
     if write_mode == "folder_only":
-        out_dir = repaired_dir_for(dataset_dir)
+        sub = (out_subdir or "repaired_frames").strip().strip("/\\") or "repaired_frames"
+        out_dir = os.path.join(dataset_dir, sub)
         os.makedirs(out_dir, exist_ok=True)
         dst = os.path.join(out_dir, name)
     elif write_mode == "backup_and_replace":
@@ -461,6 +464,41 @@ def write_repaired(dataset_dir, image_dir, name, tensor, write_mode="backup_and_
     else:
         img.save(dst)
     return dst
+
+
+def compute_metrics(before, after):
+    """Quantify a repair: sharpness gain + geometry drift + a diff heatmap.
+
+    ``gain``  = Laplacian-variance(after) / Laplacian-variance(before). >1 = sharper.
+    ``drift`` = mean absolute luma difference (0..255) between before and after; how much
+                the pixels MOVED. For a splat, low drift matters more than high gain --
+                a repair that sharpens but drifts a lot has changed the geometry.
+    ``diff``  = an INFERNO heatmap (IMAGE tensor) of where the two images differ, so you
+                can see whether the change is confined to soft texture (good) or is
+                repainting whole structures (bad).
+
+    Returns a dict with the four scalars and the diff tensor. ``after`` is resized to
+    ``before``'s size first so the comparison is pixel-aligned.
+    """
+    import cv2
+    import torch
+
+    b = _tensor_to_uint8(before)
+    a = _tensor_to_uint8(after)
+    if (a.shape[1], a.shape[0]) != (b.shape[1], b.shape[0]):
+        a = cv2.resize(a, (b.shape[1], b.shape[0]), interpolation=cv2.INTER_AREA)
+    gb = cv2.cvtColor(b, cv2.COLOR_RGB2GRAY)
+    ga = cv2.cvtColor(a, cv2.COLOR_RGB2GRAY)
+    sb = float(cv2.Laplacian(gb, cv2.CV_64F).var())
+    sa = float(cv2.Laplacian(ga, cv2.CV_64F).var())
+    gain = float(sa / sb) if sb > 1e-6 else float("nan")
+    diff = np.abs(ga.astype(np.int16) - gb.astype(np.int16))
+    drift = float(diff.mean())
+    heat = cv2.applyColorMap(diff.astype(np.uint8), cv2.COLORMAP_INFERNO)  # BGR
+    heat = np.ascontiguousarray(heat[..., ::-1])                            # -> RGB
+    diff_t = torch.from_numpy(heat.astype(np.float32) / 255.0).unsqueeze(0)
+    return {"sharp_before": sb, "sharp_after": sa, "gain": gain, "drift": drift,
+            "diff": diff_t}
 
 
 def _tensor_to_uint8(tensor):

@@ -14,6 +14,7 @@ _input/
 objinfo.json
 # Local AI-assistant session config.
 .claude/
-# Segmented dataset workflow
+# Dev workflows
 workflows/1_generate-dataset-hires-segmented.json
 workflows/1_generate-dataset-hires-ADV.json
+workflows/2*

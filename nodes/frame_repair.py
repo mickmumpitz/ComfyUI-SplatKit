@@ -255,7 +255,11 @@ class WriteBackRepairedFrame:
                     {"default": "backup_and_replace",
                      "tooltip": "backup_and_replace: overwrite images/<name>, keeping the "
                                 "original in images_repair_backup/. folder_only: write to "
-                                "repaired_frames/ and leave the dataset alone."}),
+                                "<dataset>/<out_subdir>/ and leave the dataset alone."}),
+                "out_subdir": ("STRING", {"default": "repaired_frames",
+                    "tooltip": "folder_only mode: subfolder under the dataset to write into. "
+                               "Give each backend its own (repaired_qwen / repaired_seedvr2 / "
+                               "repaired_supir) to A/B them without overwriting each other."}),
             },
         }
 
@@ -269,7 +273,8 @@ class WriteBackRepairedFrame:
     def IS_CHANGED(cls, **kwargs):
         return float("nan")
 
-    def run(self, repaired, frame_name="", job="", write_mode="backup_and_replace"):
+    def run(self, repaired, frame_name="", job="", write_mode="backup_and_replace",
+            out_subdir="repaired_frames"):
         try:
             j = json.loads(job) if job else {}
         except Exception:
@@ -291,7 +296,8 @@ class WriteBackRepairedFrame:
             raise RuntimeError("[WriteBackRepairedFrame] job is missing dataset paths -- "
                                "wire Prepare Repair Batch -> job into this node.")
 
-        dst = fr.write_repaired(ds, image_dir, name, repaired, write_mode=write_mode)
+        dst = fr.write_repaired(ds, image_dir, name, repaired, write_mode=write_mode,
+                                out_subdir=out_subdir)
         done = fr.mark_done(ds, name)
         remaining = fr.remaining_count(ds)
         # Fire AFTER done.json is written, so the auto-queued next run cannot pick this
@@ -305,11 +311,58 @@ class WriteBackRepairedFrame:
         return (dst, report)
 
 
+class RepairMetrics:
+    """Repair Metrics (SplatKit).
+
+    Measure what a repair backend actually did to a frame: sharpness GAIN and geometry
+    DRIFT, plus a heatmap of where it changed. Wire the ORIGINAL damaged frame into
+    ``before`` and the backend's output into ``after`` (Qwen / SeedVR2 / SUPIR -- any).
+
+      gain  = sharpness(after) / sharpness(before). >1 = sharper; ~1 = did nothing.
+      drift = mean absolute luma change (0..255). For a splat this is the one to watch:
+              a big gain with big drift means it repainted geometry, not just deblurred.
+
+    ``diff_map`` (an IMAGE) shows where the change landed -- wire it into a Preview Image.
+    Also prints the numbers to the console and shows them on the node.
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "before": ("IMAGE", {"tooltip": "The ORIGINAL damaged frame."}),
+                "after": ("IMAGE", {"tooltip": "The repaired frame (backend output)."}),
+            },
+            "optional": {
+                "label": ("STRING", {"default": "", "tooltip": "A name for this backend "
+                                     "(e.g. seedvr2 / supir) -- shown in the report."}),
+            },
+        }
+
+    RETURN_TYPES = ("IMAGE", "STRING", "FLOAT", "FLOAT")
+    RETURN_NAMES = ("diff_map", "report", "gain", "drift")
+    FUNCTION = "run"
+    OUTPUT_NODE = True
+    CATEGORY = "SplatKit"
+
+    def run(self, before, after, label=""):
+        m = fr.compute_metrics(before, after)
+        tag = (label.strip() + "  ") if label.strip() else ""
+        report = ("%ssharpness %.1f -> %.1f  (gain %.2fx)\ndrift %.2f/255  "
+                  "(lower = geometry preserved better)"
+                  % (tag, m["sharp_before"], m["sharp_after"], m["gain"], m["drift"]))
+        print("[RepairMetrics] " + report.replace("\n", " | "), flush=True)
+        return {"ui": {"text": [report]},
+                "result": (m["diff"], report, float(m["gain"]), float(m["drift"]))}
+
+
 NODE_CLASS_MAPPINGS = {
     "SplatKit_PrepareRepairBatch": PrepareRepairBatch,
     "SplatKit_WriteBackRepairedFrame": WriteBackRepairedFrame,
+    "SplatKit_RepairMetrics": RepairMetrics,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
     "SplatKit_PrepareRepairBatch": "Prepare Repair Batch",
     "SplatKit_WriteBackRepairedFrame": "Write Back Repaired Frame",
+    "SplatKit_RepairMetrics": "Repair Metrics",
 }
