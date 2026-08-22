@@ -53,6 +53,66 @@ def write_marker(out_dir, kind, **extra):
         json.dump(data, f, indent=2)
 
 
+# The vendored ``sphere_cubic_reprojecer`` (inside colmap_sphere.exe) does not WRAP the
+# equirect when sampling at longitude +/-180 (the u=0/W back seam). Any face pixel that
+# lands on that wrap is sampled out of bounds and comes out pure black, forming a 1px
+# black line down the vertical CENTRE column of the three faces that look toward the seam:
+#   face 2 (back)   -> full centre column, top to bottom
+#   face 4 (zenith) -> centre column, top half only
+#   face 5 (nadir)  -> centre column, bottom half only
+# Faces 0/1/3 never touch the seam. A correct wrapping bilinear sample would fill each
+# seam pixel with the mean of the columns immediately left and right of it (they sit next
+# to each other once the +/-180 wrap is honoured) -- which is exactly what this pass does.
+# The binary is compiled (no source in the pack), so we repair its output in place.
+_SEAM_FACES = (2, 4, 5)            # perspective indices carrying the centre-column seam
+_SEAM_BLACK_THR = 8                # 0-255; the seam is exactly 0, real content is not
+
+
+def repair_seam_columns(cubic_dir, tag="spheresfm"):
+    """Repaint the black centre-column seam left by sphere_cubic_reprojecer.
+
+    Operates on the freshly emitted ``*_perspective_*.png`` faces in ``cubic_dir``
+    (before they are moved into the dataset). Only faces 2/4/5 are touched, and only
+    near-black pixels on the 1-2 centre columns whose bracketing donor columns are real
+    content -- so legitimately dark scene pixels elsewhere are never altered. Returns the
+    number of faces repaired."""
+    faces = glob.glob(os.path.join(cubic_dir, "*_perspective_*.png"))
+    repaired = 0
+    for p in faces:
+        m = _FACE_RE.search(os.path.basename(p))
+        if not m or int(m.group(2)) not in _SEAM_FACES:
+            continue
+        img = cv2.imread(p, cv2.IMREAD_UNCHANGED)
+        if img is None:
+            continue
+        h, w = img.shape[:2]
+        if w < 4:
+            continue
+        c = w // 2                                   # seam sits at the centre column(s)
+        # donor columns bracketing the seam band [c-1, c]
+        left = img[:, c - 2].astype(np.float32)
+        right = img[:, min(c + 1, w - 1)].astype(np.float32)
+        fill = ((left + right) / 2.0)
+        changed = False
+        for x in (c - 1, c):
+            col = img[:, x]
+            test = col[:, :3] if col.ndim == 2 and col.shape[1] >= 3 else col
+            seam_rows = (test.max(axis=1) if test.ndim == 2 else test) <= _SEAM_BLACK_THR
+            if not seam_rows.any():
+                continue
+            col_new = col.copy()
+            col_new[seam_rows] = fill[seam_rows].astype(col.dtype)
+            img[:, x] = col_new
+            changed = True
+        if changed:
+            cv2.imwrite(p, img)
+            repaired += 1
+    if repaired:
+        print("[%s] seam-repair: repainted the reprojector's black centre column on "
+              "%d cube face(s)" % (tag, repaired))
+    return repaired
+
+
 def _build_camera_sequences(image_dir, trajectory_lengths=None):
     """Group the cube-face images into coherent per-camera sub-videos.
 
@@ -747,6 +807,7 @@ def run_spheresfm(frames, out_dir, work_dir, exe_path="",
     if int(face_size) > 0:
         repro += ["--image_size", str(int(face_size))]
     _run(exe, repro, env)
+    repair_seam_columns(cubic_dir, tag="spheresfm")
     _stage_done(4)
 
     # reorganize cubic/ (faces flat in root + sparse/ subdir) -> standard layout:
@@ -1291,6 +1352,7 @@ def add_to_spheresfm(frames, dataset_dir, exe_path="",
     if int(face_size) > 0:
         repro += ["--image_size", str(int(face_size))]
     _run(exe, repro, env)
+    repair_seam_columns(cubic_dir, tag="SphereSfM/add")
     _stage_done(5)
 
     # Merge the refreshed cube faces into the dataset. With the existing cameras fixed the
@@ -1630,6 +1692,7 @@ def run_spheresfm_dualres(lowres_frames, hires_dir, out_dir, work_dir, exe_path=
     if int(face_size) > 0:
         repro += ["--image_size", str(int(face_size))]
     _run(exe, repro, env)
+    repair_seam_columns(cubic_dir, tag="dualres")
 
     # --- reorganize cubic/ -> out_dir/images + out_dir/sparse/0 -------------
     image_dir = os.path.join(out_dir, "images")
