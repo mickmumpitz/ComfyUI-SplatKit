@@ -346,6 +346,22 @@ class HiResComposite:
                                "gate is already eroded upstream, so this is only needed if "
                                "you still see a bright/broken ring of smeared reprojection "
                                "right at the seam after setting gate_edge=0 -- try 1-2 first."}),
+                "disc_erode": ("INT", {"default": 8, "min": 0, "max": 48, "step": 1,
+                    "tooltip": "Pull the panorama coverage back this many geometry-grid px "
+                               "from every depth-discontinuity / silhouette before the gate "
+                               "is built, so the occlusion-contaminated ring at a foreground "
+                               "edge (a single-layer pano has no data behind an edge; the "
+                               "field smoothing bleeds background colour across it) is handed "
+                               "to WAN instead of surviving as a bright/sky-tinted fringe. "
+                               "Unlike edge_erode this acts on COVERAGE before the confidence "
+                               "test, so it removes the fringe even on low-motion frames "
+                               "(frame 0), where it used to survive. 8 = default, 0 = off "
+                               "(old behaviour, the fringe returns)."}),
+                "bg_fill": (["wan", "black"], {"default": "wan",
+                    "tooltip": "What fills the gated-out holes. wan (default): tone-matched "
+                               "WAN, or source extrapolation if no WAN is wired -- unchanged "
+                               "behaviour. black: pure black in every hole, a clean key for "
+                               "masking the disoccluded regions downstream."}),
             },
             "hidden": {"unique_id": "UNIQUE_ID"},
         }
@@ -364,7 +380,7 @@ class HiResComposite:
             prefetch=True, save_video=False, debug_save="off", gate_mode="hard_soft_edge",
             tone_mode="luma", moge_model=None, semantic_pano=None,
             auto_name=False, unique_id=None, save_proxies=True,
-            gate_edge=0.0, edge_erode=0):
+            gate_edge=0.0, edge_erode=0, disc_erode=8, bg_fill="wan"):
         import glob as _glob
         import json as _json
         import time
@@ -417,7 +433,8 @@ class HiResComposite:
             params=dict(geom_scale=int(geom_scale), rho_hi=float(rho_hi),
                         tone_work=int(tone_work), tone_mode=tone_mode,
                         gate_mode=gate_mode, gate_edge=float(gate_edge),
-                        edge_erode=int(edge_erode)),
+                        edge_erode=int(edge_erode), disc_erode=int(disc_erode),
+                        bg_fill=bg_fill),
             debug_save=debug_save, progress=progress, semantic=sem,
             save_proxies=bool(save_proxies))
         dt = time.perf_counter() - t0

@@ -78,6 +78,18 @@ DEFAULTS = dict(
                          # eroded by 7 geometry px upstream (see gate_build), so this is
                          # only needed if smeared boundary source pixels still survive
                          # that. Use it to trim a residual bright/broken seam ring.
+    disc_erode=8,        # geometry-grid px to pull mesh COVERAGE back from every depth-
+                         # discontinuity / hole edge BEFORE the gate is built. A single-
+                         # layer pano cannot represent what is behind a foreground edge,
+                         # and uv_smooth bleeds background texels across the silhouette,
+                         # so a thin occlusion-contaminated ring forms there. The rho gate
+                         # misses it at low parallax (rho ~ 0 -> full confidence), which is
+                         # why it survived at frame 0. Eroding the coverage drops that ring
+                         # to WAN regardless of camera motion. 0 = off (old behaviour).
+    bg_fill="wan",       # wan | black -- what fills the gated-out holes. "wan" (default):
+                         # tone-matched WAN, or source extrapolation when no WAN is wired
+                         # (unchanged behaviour). "black": pure black in every hole, a clean
+                         # key for masking the disoccluded regions downstream.
     sem_thresh=0.5,      # cutoff on the reprojected semantic mask -> force-WAN region
     mip_levels=5,        # mip pyramid depth for anti-aliased texture sampling
     chunk=10,            # frames per render call
@@ -876,6 +888,17 @@ def run_composite(src_hi, pano_geo, rail, out_dir, wan=None, out_w=8192,
                     fb_soft = torch.from_numpy(
                         np.ascontiguousarray(fb_soft)).to(device).float()
 
+                # Depth-discontinuity margin: pull the mesh coverage back from every
+                # silhouette / hole edge, so the occlusion-contaminated ring at a depth
+                # cliff (a single-layer pano has no data behind a foreground edge, and
+                # uv_smooth bleeds background texels across it) is handed to WAN instead
+                # of kept as a background-tinted fringe. Done on the COVERAGE, before the
+                # rho test, so it holds even at zero-parallax frames where rho reports full
+                # confidence -- which is exactly where the fringe used to survive.
+                disc = int(P.get("disc_erode", 0))
+                if disc > 0:
+                    m_w = _erode_t(torch, m_w, disc * gs)
+
                 # Minification limit: where one output pixel covers many source pixels
                 # the source can no longer beat WAN. Measure the WARP SCALE, not pixel
                 # noise -- a per-pixel finite difference on a one-triangle-per-pixel
@@ -972,6 +995,11 @@ def run_composite(src_hi, pano_geo, rail, out_dir, wan=None, out_w=8192,
                         with prof.t("tone_fill"):
                             fill_t = _tone_fill_gpu(torch, cv2, hi_t, fill_t, gate_t,
                                                     out_w, out_h, P)
+                        if P.get("bg_fill", "wan") == "black":
+                            # Holes become pure black instead of WAN / source-fill: a clean
+                            # key for masking the disoccluded regions. debug/wan_fill then
+                            # shows black too, and the blend below collapses to gate*source.
+                            fill_t = torch.zeros_like(hi_t)
                         if "source" in dbg_dirs:
                             writer.save(os.path.join(dbg_dirs["source"], fname),
                                         hi_t.clamp(0, 255).to(torch.uint8)[0]
@@ -1038,7 +1066,10 @@ def run_composite(src_hi, pano_geo, rail, out_dir, wan=None, out_w=8192,
                     if "gate" in dbg_dirs:
                         writer.save(os.path.join(dbg_dirs["gate"], fname),
                                     (np.clip(gate[..., 0], 0, 1) * 255).astype(np.uint8))
-                    comp = np.clip(gate * fused + (1 - gate) * wan_up.astype(np.float32),
+                    bg = (np.zeros_like(wan_up, dtype=np.float32)
+                          if P.get("bg_fill", "wan") == "black"
+                          else wan_up.astype(np.float32))
+                    comp = np.clip(gate * fused + (1 - gate) * bg,
                                    0, 255).astype(np.uint8)
                     gate_small = cv2.resize(
                         (np.clip(gate[..., 0], 0, 1) * 255).astype(np.uint8), (pw, ph),
