@@ -71,9 +71,9 @@ visibly degrades what WAN paints into the holes.
 ## Nodes
 
 Dataset nodes live under **SplatKit**. Six generator-specific nodes live under
-**SplatKit/4DAnyone**, and eight shared training/sequence nodes under **SplatKit/Splatting**; see [the 4D guide](docs/4DANYONE.md).
+**SplatKit/4DAnyone**, and nine shared training/sequence nodes under **SplatKit/Splatting**; see [the 4D guide](docs/4DANYONE.md).
 Start with [backend setup](workflows/4danyone/4d_backend_setup.json), then open
-[video to splat](workflows/4danyone/4d_video_to_splat.json) and select your video. Missing 4D models download into `models/splatkit/` with retries and terminal progress bars; existing files are reused.
+[video to splat](workflows/4danyone/4d_video_to_splat.json), install the [required models](docs/4DANYONE.md#manual-model-installation), and select them in the model loaders. The 4D workflow does not download model weights automatically.
 
 - **Core** — `Dataset Project`, `MoGe Model Loader`, `Camera Plot Fly-Through (Geometry)`,
   `Camera Plot Scene Reference`, `Wan I2V Masked-Video Conditioning`.

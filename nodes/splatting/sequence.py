@@ -9,15 +9,15 @@ from pathlib import Path
 
 from ...core.splatting.constants import CATEGORY, LOG, NODE_PREFIX, PACK_ROOT, TYPE_FRAMESET, TYPE_SEQUENCE
 from ...core.splatting.backend import BackendError, load_config
-from ...core.splatting.paths import training_models_root, sequence_dir, output_root, _safe_name
-from ...core.splatting.cache import write_json
+from ...core.splatting.paths import perceptual_options, resolve_perceptual, sequence_dir, output_root, _safe_name
+from ...core.splatting.cache import file_hash, write_json
 from ...core.splatting.runner import FrameProgress, run
 from ...core.splatting import runtime
 from ...core.splatting.security import check_path
 from ...core.splatting.sequence import ensure_player_files, load_images, read_sequence, read_frameset, splat_from_ply
 
 QUALITY = ["draft", "standard", "best"]
-PERCEPTUAL = "perceptual/imagenet-vgg-verydeep-19-conv.safetensors"
+TYPE_PERCEPTUAL = "SPLATKIT_PERCEPTUAL_MODEL"
 _FRAME_LINE = re.compile(r"^\s*frame\s+(\d+)\s+(cold|warm)\s+\d+\s+it\b", re.IGNORECASE)
 
 
@@ -41,6 +41,28 @@ def _finished_sequence(name, signature):
     return None
 
 
+class SplatKitPerceptualModelLoader:
+    CATEGORY = CATEGORY
+    FUNCTION = "load"
+    RETURN_TYPES = (TYPE_PERCEPTUAL,)
+    RETURN_NAMES = ("perceptual_model",)
+    DESCRIPTION = "Select local VGG-19 training weights from models/splatkit/perceptual. No automatic downloads."
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {"model_name": (perceptual_options(),)}}
+
+    @classmethod
+    def IS_CHANGED(cls, **kwargs):
+        return float("nan")
+
+    def load(self, model_name):
+        try:
+            return (str(resolve_perceptual(model_name)),)
+        except FileNotFoundError as exc:
+            raise BackendError(str(exc)) from exc
+
+
 class SplatKitTrain:
     """Frameset in, one gaussian splat per frame out."""
 
@@ -58,6 +80,7 @@ class SplatKitTrain:
         return {
             "required": {
                 "frameset": (TYPE_FRAMESET, {"tooltip": "From Export Frameset or Load Frameset."}),
+                "perceptual_model": (TYPE_PERCEPTUAL, {"tooltip": "From Splat Perceptual Model Loader."}),
                 "quality": (QUALITY, {
                     "default": "standard",
                     "tooltip": "draft: a couple of minutes, proves the dataset is right. "
@@ -88,7 +111,12 @@ class SplatKitTrain:
         # Recheck the disk cache even when ComfyUI still has this graph in memory.
         return float("nan")
 
-    def train(self, frameset, quality, name, clean=True, motion=True, retrain=False):
+    def train(self, frameset, quality, name, clean=True, motion=True, retrain=False, perceptual_model=None):
+        if not perceptual_model:
+            raise BackendError("Connect Splat Perceptual Model Loader and select VGG-19 weights.")
+        weights = check_path(perceptual_model, "perceptual_model")
+        if not weights.is_file():
+            raise BackendError(f"Perceptual weights not found: {weights}")
         config = load_config(require_generator=False)
         frameset = read_frameset(check_path(frameset["dir"], "frameset"), frameset.get("frame_ids"))
         src = Path(frameset["dir"])
@@ -96,6 +124,7 @@ class SplatKitTrain:
         motion = bool(motion) and has_skeleton
         signature = {"schema": 2, "runtime": config["runtime_id"], "pack": runtime.pack_version(),
                      "trainer": runtime.trainer_id(),
+                     "perceptual_model": file_hash(weights),
                      "source": str(src), "content": frameset["fingerprint"],
                      "frames": frameset["frame_ids"], "quality": quality,
                      "clean": bool(clean), "motion": motion}
@@ -113,9 +142,7 @@ class SplatKitTrain:
             args.append("--no-advect")
             if has_skeleton is False:
                 print(f"{LOG} {src.name} has no skeleton.npz; warm-starting without motion")
-        weights = training_models_root() / PERCEPTUAL
-        if weights.is_file():
-            args += ["--perceptual-weights", str(weights)]
+        args += ["--perceptual-weights", str(weights)]
         total = frameset.get("frames", 1)
         try:
             import comfy.model_management as mm
@@ -137,7 +164,7 @@ class SplatKitTrain:
                 return Image.open(png).convert("RGB")
             return None
 
-        run(args, cwd=PACK_ROOT, extra_env={"SPLATKIT_TRAINING_HOME": str(training_models_root())},
+        run(args, cwd=PACK_ROOT,
             progress=FrameProgress(total), preview=preview)
         seq = read_sequence(out)
         if not seq["preview"]:
@@ -282,6 +309,7 @@ class SplatKitInfo:
 
 
 NODE_CLASS_MAPPINGS = {
+    NODE_PREFIX + "PerceptualModelLoader": SplatKitPerceptualModelLoader,
     NODE_PREFIX + "TrainSequence": SplatKitTrain,
     NODE_PREFIX + "LoadSequence": SplatKitLoadSequence,
     NODE_PREFIX + "SequenceFrame": SplatKitGetFrame,
@@ -289,6 +317,7 @@ NODE_CLASS_MAPPINGS = {
     NODE_PREFIX + "SequenceInfo": SplatKitInfo,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
+    NODE_PREFIX + "PerceptualModelLoader": "Splat Perceptual Model Loader",
     NODE_PREFIX + "TrainSequence": "Train Sequence",
     NODE_PREFIX + "LoadSequence": "Load Sequence",
     NODE_PREFIX + "SequenceFrame": "Sequence Frame",

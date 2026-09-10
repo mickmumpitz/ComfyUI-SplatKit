@@ -39,8 +39,9 @@ GY, GH, Y0 = -40, 1060, 100
 
 HOW_TO = """## How to use
 1. Open `4d_backend_setup.json` and run **Splat Backend Setup** with *install now* enabled once.
-2. Select your video and queue. Missing models download automatically, with resumable retries and terminal progress bars.
-3. Inspect the generated view grid and the Sequence Player. Drag to orbit, space to play.
+2. Download the files listed in docs/4DANYONE.md and refresh ComfyUI's model lists.
+3. Select each file in 4DAnyone Model Loader and Splat Perceptual Model Loader, select your video, and queue.
+4. Inspect the generated view grid and the Sequence Player. Drag to orbit, space to play.
 
 One person, roughly in place. Slow hands and close-fitting clothing work best.
 Start with frames 0-20 and draft training, then increase the range and quality.
@@ -54,9 +55,9 @@ Setup in this graph reports status only. Static panorama/COLMAP training is a se
 and is not exposed by this 4D integration. See docs/4DANYONE.md."""
 
 MODELS = """## Models
-Download links: [docs/4DANYONE.md](https://github.com/mickmumpitz/ComfyUI-SplatKit/blob/main/docs/4DANYONE.md). Existing model files are reused.
+Download links: [docs/4DANYONE.md](https://github.com/mickmumpitz/ComfyUI-SplatKit/blob/main/docs/4DANYONE.md). No automatic model downloads.
 - **4DAnyone**: models/splatkit/4danyone (checkpoint, VAE, Turbo, prompt context).
-- **BiRefNet**: models/splatkit/birefnet.
+- **BiRefNet**: models/splatkit/4danyone/birefnet.
 - **VGG-19** training loss: models/splatkit/perceptual.
 - **SAM 3D Body**: models/detection (ComfyUI's model).
 
@@ -100,7 +101,11 @@ def build(info: dict, *, clip: str = "your_clip.mp4", preset: str | None = None,
     _md(g, MODELS, (1020, Y0), (540, 280), "Models", NOTE_MODELS)
     ids["validate"] = g.node(P + "4DAnyoneValidateInput", (1020, Y0 + 330), (360, 100))
     ids["report"] = g.node("PreviewAny", (1020, Y0 + 460), (360, 130), title="Input report")
-    ids["models"] = g.node(P + "4DAnyoneModelLoader", (1020, Y0 + 620), (540, 106))
+    ids["models"] = g.node(P + "4DAnyoneModelLoader", (1020, Y0 + 620), (540, 240), values={
+        "checkpoint": "model.safetensors", "vae": "Wan2.2_VAE.pth",
+        "prompt_context": "prompt_context.safetensors", "birefnet": "birefnet/model.safetensors",
+        "sam3d_body": "sam_3d_body_dinov3_bf16.safetensors",
+        "turbo_lora": "Wan22_TI2V_5B_Turbo_lora_rank_64_fp16.safetensors"})
     _paint(g, ids["models"], LOADER, LOADER_BG)
 
     # GENERATE VIEWS (4DANYONE)
@@ -124,6 +129,9 @@ def build(info: dict, *, clip: str = "your_clip.mp4", preset: str | None = None,
                           values={"quality": quality, "name": name})
     # Train's body ends at Y0 + 330 and a node's title bar sits above its pos, so the
     # next node needs its pos 40 below that or the title bar rides over Train's last row.
+    ids["perceptual"] = g.node(P + "PerceptualModelLoader", (x4, Y0 + 410), (420, 90),
+                              values={"model_name": "imagenet-vgg-verydeep-19-conv.safetensors"})
+    _paint(g, ids["perceptual"], LOADER, LOADER_BG)
     ids["info"] = g.node(P + "SequenceInfo", (x4, Y0 + 550), (420, 200))
 
     # VIEW + EXPORT
@@ -159,6 +167,7 @@ def build(info: dict, *, clip: str = "your_clip.mp4", preset: str | None = None,
     g.link(ids["grid_video"], "VIDEO", ids["grid_save"], "video")
     g.link(ids["generate"], "views", ids["export"], "views")
     g.link(ids["export"], "frameset", ids["train"], "frameset")
+    g.link(ids["perceptual"], "perceptual_model", ids["train"], "perceptual_model")
     g.link(ids["train"], "sequence", ids["info"], "sequence")
     g.link(ids["train"], "sequence", ids["player"], "sequence")
     g.link(ids["train"], "sequence", ids["frame"], "sequence")

@@ -30,6 +30,10 @@ def inference(
     sam3d_npz: str | None = None,
     prepare_only: bool = False,
     pad_short: bool = False,
+    vae_path: str | None = None,
+    prompt_context_path: str | None = None,
+    foreground_model_dir: str | None = None,
+    turbo_lora_path: str | None = None,
 ) -> dict:
     """Generate synchronized target-view videos from one monocular video.
 
@@ -52,7 +56,7 @@ def inference(
         enable_turbo: Whether to use 4DAnyone-Turbo for accelerated denoising.
             Disable it to use the base 4DAnyone model.
         data_dir: Root for the reusable pose cache and final 4DAnyone outputs.
-        model_dir: Model root; missing public checkpoints download here.
+        model_dir: Local model root. Missing weights must be installed manually.
         checkpoint_path: Local 4DAnyone checkpoint override.
         gpu_ids: GPU IDs used for parallel pose/VAE view stages and target
             denoising. Omit to use all visible GPUs.
@@ -121,6 +125,10 @@ def inference(
         data_dir=data_dir,
         model_dir=model_dir,
         checkpoint_path=checkpoint_path,
+        vae_path=vae_path,
+        prompt_context_path=prompt_context_path,
+        foreground_model_dir=foreground_model_dir,
+        turbo_lora_path=turbo_lora_path,
         gpu_ids=gpu_ids,
         target_fps=target_fps,
         start_time=start_time,

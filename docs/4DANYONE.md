@@ -16,8 +16,7 @@ space for outputs. Setup requires at least 20 GB free.
    **install now**, and queue once. Setup installs the isolated backend and checks CUDA.
 3. Open [4d_video_to_splat.json](../workflows/4danyone/4d_video_to_splat.json), select
    a video, and start with Export Frameset set to **0-20** and training at **draft**.
-   Missing models download on first use, with terminal progress bars showing bytes,
-   speed and remaining time. Existing completed model files are reused.
+   Download the models below and select them in both model loader nodes before queuing.
 4. Inspect the generated views and Sequence Player before increasing the frame
    range and training quality. Drag in the player to orbit; press Space to play.
 
@@ -26,6 +25,41 @@ produce inconsistent views. A shorter export range reduces export and training
 work, but does not shorten view generation.
 
 ## Files and dependencies
+
+### Manual model installation
+
+Generation, masking and training never download missing models. Keep files you already
+downloaded; refresh ComfyUI's model lists after adding files. Connect **4DAnyone Model
+Loader** to Generate Views and **Splat Perceptual Model Loader** to Train Sequence.
+Old workflows need these loader selections and connections updated.
+
+Download these files from the [pinned 4DAnyone model folder](https://huggingface.co/AntResearch/4DAnyone/tree/4c80e87b805a5f8461cf339cdbe2fb4249e585aa/4danyone)
+into `ComfyUI/models/splatkit-4danyone/`:
+
+- `model.safetensors`
+- `Wan2.2_VAE.pth`
+- `prompt_context.safetensors`
+- `Wan22_TI2V_5B_Turbo_lora_rank_64_fp16.safetensors` (only needed with Turbo enabled;
+  otherwise select **none** in the loader).
+
+Download `model.safetensors`, `config.json`, `birefnet.py`, and `BiRefNet_config.py`
+from [the pinned BiRefNet revision](https://huggingface.co/ZhengPeng7/BiRefNet/tree/e2bf8e4460fc8fa32bba5ea4d94b3233d367b0e4)
+into `ComfyUI/models/splatkit-4danyone/birefnet/`. Select its `model.safetensors`
+in the loader; the other three files must sit alongside it.
+
+Download [SAM 3D Body bf16](https://huggingface.co/Comfy-Org/sam-3d-body/resolve/main/detection/sam_3d_body_dinov3_bf16.safetensors)
+into `ComfyUI/models/detection/` and select it in 4DAnyone Model Loader.
+
+For Train Sequence, download [VGG-19 perceptual weights](https://huggingface.co/AntResearch/4DAnyone/resolve/7850985888b56aabf09e69480b73248f1a76bcbe/perceptual/imagenet-vgg-verydeep-19-conv.safetensors)
+into `ComfyUI/models/splatkit/perceptual/` and select the file in Splat Perceptual
+Model Loader. Generation alone does not require VGG-19.
+
+The loaders validate local paths. SAM 3D Body loads inside ComfyUI when pose estimation
+runs; 4DAnyone, the VAE, LoRA, BiRefNet and VGG-19 load in the separate backend when
+their stages run. Backend model paths are not compatible with ComfyUI's MODEL or VAE sockets.
+
+Additional model roots can be configured in `extra_model_paths.yaml` using
+`splatkit_4danyone`, `splatkit_perceptual`, and the core `detection` key.
 
 Paths below are relative to ComfyUI, except the backend paths inside this node pack.
 
@@ -81,8 +115,9 @@ restricted. `SPLATKIT_ALLOW_REMOTE=1` overrides these checks for secured deploym
 
 The external generator in `vendored/4danyone/` is the `sam3d-cleanup` fork at
 `dfa589f`. Its upstream licenses and source attributions are retained.
-SplatKit changes `fdanyone/assets.py` and `fdanyone/download.py` to organize models
-under `models/splatkit/`, retry interrupted transfers and exclude VGG from generator downloads.
+SplatKit changes `fdanyone/assets.py` to organize models under `models/splatkit/4danyone/`
+and to accept explicit local model paths. Automatic downloads are disabled in the node
+execution paths; interrupted backend transfers still retry.
 The trainer, adapters and tools are SplatKit code; see [third-party notices](THIRD_PARTY_NOTICES.md)
 for the external material they use.
 

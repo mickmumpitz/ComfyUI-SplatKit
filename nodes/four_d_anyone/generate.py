@@ -12,7 +12,7 @@ from ...core.splatting.constants import LOG, NODE_PREFIX, PACK_VERSION
 from ...core.four_d_anyone.constants import CATEGORY, TYPE_MODELS, TYPE_VIEWS
 from ...core.splatting.backend import BackendError, load_config
 from ...core.splatting.cache import file_hash
-from ...core.four_d_anyone.paths import AUTO, checkpoint_options, generated_root, models_root, resolve_checkpoint
+from ...core.four_d_anyone.paths import BIREFNET_FILES, generated_root, model_options, resolve_model
 from ...core.four_d_anyone.pose import estimate_pose, host_support
 from ...core.splatting.runner import run, tqdm_progress
 from ...core.splatting.security import check_path
@@ -62,46 +62,42 @@ class FourDAnyoneValidateInput:
 
 
 class FourDAnyoneModelLoader:
-    """Pick the checkpoint. Leave it on auto and the backend downloads its own."""
+    """Select installed generation and pose assets without downloading weights."""
 
     CATEGORY = CATEGORY
     FUNCTION = "load"
     RETURN_TYPES = (TYPE_MODELS,)
     RETURN_NAMES = ("models",)
-    DESCRIPTION = ("Which 4DAnyone checkpoint to use. Files in ComfyUI/models/splatkit/4danyone "
-                   "are listed; 'auto' downloads the published one there on first use. This "
-                   "carries file paths, not tensors, because the generator runs in its own "
-                   "process.")
+    DESCRIPTION = ("Select local 4DAnyone, VAE, prompt context, BiRefNet and SAM 3D Body files. "
+                   "Download links and folders are in docs/4DANYONE.md. No automatic downloads. "
+                   "Passes model paths to generation; weights are loaded when used.")
 
     @classmethod
     def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "checkpoint": (checkpoint_options(), {
-                    "tooltip": "The 4DAnyone DiT checkpoint. 'auto' resolves and downloads it."}),
-            },
-            "optional": {
-                "model_dir": ("STRING", {
-                    "default": "",
-                    "tooltip": "Advanced. Use a different model tree (VAE, matting model and "
-                               "all). Empty means ComfyUI/models/splatkit."}),
-            },
-        }
+        return {"required": {
+            kind: (model_options(kind), {"tooltip": tooltip}) for kind, tooltip in (
+                ("checkpoint", "4DAnyone model.safetensors in models/splatkit/4danyone."),
+                ("vae", "Wan2.2_VAE.pth in models/splatkit/4danyone."),
+                ("prompt_context", "prompt_context.safetensors in models/splatkit/4danyone."),
+                ("birefnet", "birefnet/model.safetensors, alongside config.json, birefnet.py and BiRefNet_config.py."),
+                ("sam3d_body", "SAM 3D Body weights in models/detection."),
+                ("turbo_lora", "Published rank-64 Turbo LoRA in models/splatkit/4danyone. Choose none for base generation."),
+            )}}
 
-    def load(self, checkpoint, model_dir=""):
+    @classmethod
+    def IS_CHANGED(cls, **kwargs):
+        return float("nan")
+
+    def load(self, checkpoint, vae, prompt_context, birefnet, sam3d_body, turbo_lora):
         try:
-            ckpt = resolve_checkpoint(checkpoint)
+            selected = {kind: resolve_model(kind, name) for kind, name in {
+                "checkpoint": checkpoint, "vae": vae, "prompt_context": prompt_context,
+                "birefnet": birefnet, "sam3d_body": sam3d_body, "turbo_lora": turbo_lora,
+            }.items()}
         except FileNotFoundError as exc:
             raise BackendError(str(exc)) from exc
-        tree = check_path(model_dir, "model_dir") if model_dir.strip() else None
-        if tree is not None and not tree.is_dir():
-            raise BackendError(f"model_dir does not exist: {tree}")
-        bundle = {"checkpoint": str(ckpt) if ckpt else "", "model_dir": str(tree) if tree else ""}
-        print(f"{LOG} models: {ckpt.name if ckpt else 'backend default'}")
+        bundle = {kind: str(path) if path else "" for kind, path in selected.items()}
         return (bundle,)
-
-
-EMPTY_MODELS = {"checkpoint": "", "model_dir": ""}
 
 
 class FourDAnyoneGenerateViews:
@@ -120,6 +116,7 @@ class FourDAnyoneGenerateViews:
     def INPUT_TYPES(cls):
         return {
             "required": {
+                "models": (TYPE_MODELS, {"tooltip": "From 4DAnyone Model Loader. All weights must already be installed."}),
                 "camera_preset": (list(CAMERA_PRESETS), {
                     "default": FULL_BODY_PRESET,
                     "tooltip": "How many angles to invent and at what height. Time scales with "
@@ -135,7 +132,6 @@ class FourDAnyoneGenerateViews:
                 "video": ("VIDEO", {"tooltip": "From Load Video."}),
                 "video_path": ("STRING", {"default": "",
                                           "tooltip": "Overrides the VIDEO input when set."}),
-                "models": (TYPE_MODELS, {"tooltip": "Optional. From FourDAnyone Model Loader."}),
                 "attention": (["sdpa", "sage", "auto"], {
                     "default": "sdpa",
                     "tooltip": "Attention backend inside the generator. sage is faster when "
@@ -170,6 +166,19 @@ class FourDAnyoneGenerateViews:
                  views_per_group="auto", enable_rcp=True, enable_tcr=True):
         import comfy.model_management as mm
 
+        if not models:
+            raise BackendError("Connect 4DAnyone Model Loader and select the installed models.")
+        needed = ["checkpoint", "vae", "prompt_context", "birefnet", "sam3d_body"]
+        if turbo:
+            needed.append("turbo_lora")
+        selected = {}
+        for kind in needed:
+            if not models.get(kind) or not Path(models[kind]).is_file():
+                raise BackendError(f"Select an installed {kind} in 4DAnyone Model Loader.")
+            selected[kind] = Path(models[kind]).resolve()
+        for name in BIREFNET_FILES:
+            if not (selected["birefnet"].parent / name).is_file():
+                raise BackendError(f"Missing BiRefNet file: {selected['birefnet'].parent / name}")
         config = load_config()
         backend_root = Path(config["backend_root"])
         data_dir = generated_root(num_frames, start_time, target_fps)
@@ -185,22 +194,23 @@ class FourDAnyoneGenerateViews:
         total = views_per_ring * len(pitches)
         print(f"{LOG} {camera_preset}: {total} views ({views_per_ring} per ring at pitch {pitches})")
 
-        chosen = dict(EMPTY_MODELS, **(models or {}))
-        ckpt = Path(chosen["checkpoint"]) if chosen["checkpoint"] else None
-        model_dir = Path(chosen["model_dir"]) if chosen["model_dir"] else models_root()
-        if ckpt is not None and not ckpt.is_file():
-            raise BackendError(f"checkpoint no longer exists: {ckpt}")
-        model_dir.mkdir(parents=True, exist_ok=True)
+        ckpt = selected["checkpoint"]
+        model_dir = ckpt.parent
+        model_hashes = {kind: file_hash(path) for kind, path in selected.items()}
+        model_hashes["birefnet_files"] = {name: file_hash(selected["birefnet"].parent / name)
+                                         for name in BIREFNET_FILES if name != "model.safetensors"}
 
         # Everything that changes the output keys the cache label. Keyed only when it differs
         # from the default, so results made before an option existed keep their label.
         digest = file_digest(source)
         # Canonical-clip and pose caches must not alias clips with the same filename.
         data_dir = data_dir / ("clip_" + digest + "_" + config["runtime_id"][:12]
-                               + "_" + config["generator_source_id"][:12])
+                               + "_" + config["generator_source_id"][:12]
+                               + "_" + model_hashes["sam3d_body"][:12])
         params = {
             "source": digest, "runtime": config["runtime_id"], "pack": PACK_VERSION,
             "generator": config["generator_source_id"],
+            "models": model_hashes,
             "model_dir": str(model_dir.resolve()), "low_vram": low_vram,
             "views_per_layer": views_per_ring, "layer_pitches": pitches,
             "start_yaw": start_yaw, "yaw_span": yaw_span, "views_per_group": views_per_group,
@@ -213,8 +223,6 @@ class FourDAnyoneGenerateViews:
             params["profile"] = "rank64_delta4"
         if num_frames != 121:
             params["num_frames"] = num_frames
-        if ckpt is not None:
-            params["checkpoint"] = file_hash(ckpt)
         # The backend parses its arguments with python-fire, which literal-evals values: a
         # label that happens to be all digits (or "12e3456789") would become a number and
         # the result would land under a different name. A letter in front prevents that.
@@ -243,10 +251,14 @@ class FourDAnyoneGenerateViews:
                 "--run_label", label,
                 "--pad_short", "True",
             ]
-            if ckpt is not None:
-                command += ["--checkpoint_path", str(ckpt.resolve())]
+            command += ["--checkpoint_path", str(ckpt)]
+            command += ["--vae_path", str(selected["vae"]),
+                        "--prompt_context_path", str(selected["prompt_context"]),
+                        "--foreground_model_dir", str(selected["birefnet"].parent)]
+            if turbo:
+                command += ["--turbo_lora_path", str(selected["turbo_lora"])]
             pose_npz = self._pose(config, data_dir, source, start_time, target_fps, num_frames,
-                                  digest)
+                                  digest, selected["sam3d_body"])
             command += ["--sam3d_npz", str(pose_npz)]
 
             # The generator needs nearly the whole card.
@@ -267,11 +279,12 @@ class FourDAnyoneGenerateViews:
 
         bundle = load_bundle(result_dir)
         bundle["source_video"] = str(source)
+        bundle["foreground_model_dir"] = str(selected["birefnet"].parent)
         return (bundle, str(result_dir))
 
     @staticmethod
     def _pose(config, data_dir: Path, source: Path, start_time, target_fps, num_frames,
-              digest: str) -> Path:
+              digest: str, sam3d_body: Path) -> Path:
         """Estimate this clip's body pose here in ComfyUI and return the npz.
 
         The pose belongs to the canonical clip (the frames chosen by start_time, the frame
@@ -300,7 +313,7 @@ class FourDAnyoneGenerateViews:
         clip = pose_dir / "canonical_clip.mp4"
         if not clip.is_file():
             raise BackendError(f"The backend did not publish a canonical clip at {clip}")
-        result = estimate_pose(clip, npz)
+        result = estimate_pose(clip, npz, model_path=sam3d_body)
         print(f"{LOG} body pose: {result['frames']} frames, {result['keypoints']} keypoints -> {npz}")
         return npz
 
@@ -503,4 +516,4 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     NODE_PREFIX + "4DAnyoneLoadView": "4DAnyone Load View",
 }
 
-__all__ = ["AUTO", "NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]
+__all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]

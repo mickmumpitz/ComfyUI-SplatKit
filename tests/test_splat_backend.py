@@ -165,6 +165,8 @@ with _get_progress_bar_context(desc='Download test.bin', log_level=30, total=102
         output.mkdir()
         config = {"python":sys.executable, "runtime_id":"test"}
         seq = {"dir":str(output), "preview":["preview.png"]}
+        weights = self.root / "vgg.safetensors"
+        weights.write_bytes(b"weights")
         mm = types.ModuleType("comfy.model_management")
         mm.unload_all_models = Mock()
         mm.soft_empty_cache = Mock()
@@ -175,14 +177,14 @@ with _get_progress_bar_context(desc='Download test.bin', log_level=30, total=102
              patch.object(train, "check_path", side_effect=lambda p, _:Path(p)), \
              patch.object(train, "_finished_sequence", return_value=None), \
              patch.object(train, "sequence_dir", return_value=output), \
-             patch.object(train, "training_models_root", return_value=self.root / "models"), \
              patch.object(train, "run") as run, \
              patch.object(train, "read_sequence", return_value=seq), \
              patch.object(train, "load_images", return_value="images"):
-            train.SplatKitTrain().train(fs, "draft", "shot")
+            train.SplatKitTrain().train(fs, "draft", "shot", perceptual_model=str(weights))
         args = run.call_args.args[0]
         self.assertEqual(args[1:3], [str(runtime.WORKER), "train"])
         self.assertEqual(args[args.index("--frames")+1], "1")
+        self.assertEqual(args[args.index("--perceptual-weights")+1], str(weights))
         cached = json.loads((output / "splatkit_cache.json").read_text())
         self.assertEqual(cached["trainer"], runtime.trainer_id())
         self.assertEqual(cached["pack"], runtime.pack_version())

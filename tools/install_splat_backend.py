@@ -281,7 +281,7 @@ def install(rebuild=False, keep_cache=False):
     remove_backend(previous)
     if not keep_cache:
         clean_cache()
-    log("Ready. Models download when you run generation or training.")
+    log("Ready. Install model files and select them in the model loader nodes. See docs/4DANYONE.md.")
 
 def main():
     if sys.platform != "win32" or platform.machine().lower() not in {"amd64", "x86_64"}:

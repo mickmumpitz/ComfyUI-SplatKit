@@ -1,5 +1,4 @@
 """Download recovery checks without network access or model dependencies."""
-import importlib.util
 import sys
 import tempfile
 import unittest
@@ -12,10 +11,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "vendored" / "4dany
 from fdanyone import download
 from fdanyone.errors import AssetError
 from fdanyone import assets
-
-spec = importlib.util.spec_from_file_location("training_weights", Path(__file__).resolve().parents[1] / "core/splatting/training/weights.py")
-weights = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(weights)
 
 
 class ModelDownloadTests(unittest.TestCase):
@@ -114,20 +109,6 @@ class ModelDownloadTests(unittest.TestCase):
             base = assets.resolve_base_assets(root)
             self.assertEqual(base.vae, root / "4danyone" / assets.WAN_VAE)
             self.assertEqual(base.prompt_context, root / "4danyone" / assets.PROMPT_CONTEXT)
-
-    def test_vgg_download_retries_in_the_same_cache_and_reuses_completed_file(self):
-        with tempfile.TemporaryDirectory() as folder:
-            root = Path(folder)
-            destination = root / weights.FILENAME
-            with patch.object(weights, "cache_dir", return_value=root), \
-                 patch.object(weights.time, "sleep"), \
-                 patch("huggingface_hub.hf_hub_download", side_effect=[ChunkedEncodingError("broken"), str(destination)]) as fetch:
-                self.assertEqual(weights.perceptual_weights(), destination)
-                self.assertEqual(fetch.call_count, 2)
-                self.assertEqual(fetch.call_args_list[0], fetch.call_args_list[1])
-                destination.write_bytes(b"complete")
-                self.assertEqual(weights.perceptual_weights(), destination)
-                self.assertEqual(fetch.call_count, 2)
 
 
 if __name__ == "__main__":
