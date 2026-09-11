@@ -1,4 +1,4 @@
-"""One-click backend install."""
+"""Backend status report (installation happens out-of-workflow)."""
 
 from __future__ import annotations
 

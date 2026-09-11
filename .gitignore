@@ -19,6 +19,3 @@ workflows/1_generate-dataset-hires-segmented.json
 workflows/1_generate-dataset-hires-ADV.json
 workflows/2*
 workflows/4*
-!workflows/4danyone/
-!workflows/4danyone/4d_backend_setup.json
-!workflows/4danyone/4d_video_to_splat.json
