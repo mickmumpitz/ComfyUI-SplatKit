@@ -1,16 +1,23 @@
-# SplatKit runtime dependencies.
+# SplatKit dependencies installed into ComfyUI's Python environment.
 #
-# The rasterizer is pure PyTorch (in-repo shim/) -- there are NO compiled deps,
-# no nvdiffrast and no pytorch3d. torch, numpy, scipy, Pillow, tqdm and
+# The panorama rasterizer is pure PyTorch (in-repo shim/), with no nvdiffrast
+# or pytorch3d dependency. torch, numpy, scipy, Pillow, tqdm and
 # huggingface_hub (via transformers) already ship with ComfyUI, so the only
 # packages a clean ComfyUI install is missing are the few below.
+#
+# The video/pose/player adapters also use av, aiohttp, safetensors and torchvision,
+# provided by ComfyUI (0.34 or newer for these optional nodes).
+# Gaussian training and 4DAnyone run in a separate managed Python environment.
+# tools/install_splat_backend.py installs tools/splatting/requirements.txt plus
+# vendored/4danyone/requirements.txt there, using the verified gsplat wheel.
+# Do not add that environment's torch/CUDA/gsplat pins to these host requirements.
 
 opencv-python      # cv2 -- panorama/perspective resampling, EXR I/O
 trimesh            # mesh build for the depth->mesh render
 scikit-image       # skimage -- used by the vendored utils_3dscene.nvrender
 click              # CLI decorators in the vendored MoGe infer_panorama
 matplotlib         # MoGe depth colorize (moge.utils.vis), imported at module load
-huggingface_hub    # MoGe checkpoint auto-download (Ruicheng/moge-vitl); usually present via transformers
+huggingface_hub[hf_xet]  # MoGe checkpoint auto-download (Ruicheng/moge-vitl); usually present via transformers. The [hf_xet] extra pulls hf_xet so Xet-backed repos download over the fast path instead of falling back to plain HTTP with a warning.
 
 # pyrender is NOT required: it is referenced by two unused helpers in the vendored
 # pipeline_utils_3dscene and is auto-stubbed at import time. Install it only if you

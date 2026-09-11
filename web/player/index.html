@@ -1,0 +1,22 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>SplatKit Sequence Player</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+html,body{margin:0;height:100%;background:#000;color:#ddd;font:13px/1.4 system-ui,sans-serif;overflow:hidden}
+#canvas{width:100%;height:100%;display:block;touch-action:none}
+#info{position:fixed;top:8px;left:12px;background:rgba(0,0,0,.6);padding:6px 10px;border-radius:4px}
+#help{position:fixed;top:8px;right:12px;background:rgba(0,0,0,.6);padding:4px 8px;border-radius:4px;max-width:240px;font-size:11px}
+#ui{position:fixed;left:0;right:0;bottom:0;padding:8px 12px;background:rgba(0,0,0,.6);display:flex;gap:10px;align-items:center}
+#ui input[type=range]{flex:1}
+#ui button,#ui select{background:#333;color:#eee;border:1px solid #555;padding:4px 10px;border-radius:4px;cursor:pointer}
+#spinner,#progress{display:none}
+</style></head><body>
+<canvas id="canvas"></canvas>
+<div id="info"><span id="fps"></span> <span id="camid"></span> <span id="message"></span></div>
+<div id="help">Drag: orbit &middot; right-drag: pan &middot; wheel: zoom &middot; space: play/pause &middot; &larr; &rarr;: step &middot; F: reset</div>
+<div id="spinner"></div><div id="progress"></div>
+<div id="ui"><button id="play">&#9208;</button><input id="scrub" type="range" min="0" max="0" value="0"><span id="frameLabel">0 / 0</span>
+<label>fps <select id="pfps"><option>6</option><option>12</option><option>24</option><option>30</option><option>60</option></select></label>
+<label title="render scale: 2x renders four times the pixels and filters them down">render <select id="quality"><option value="1">1x</option><option value="2">2x</option></select></label>
+<label title="view-dependent colour from the spherical harmonics"><input id="shtoggle" type="checkbox" checked> SH</label></div>
+<script src="player.js?v=4"></script>
+</body></html>

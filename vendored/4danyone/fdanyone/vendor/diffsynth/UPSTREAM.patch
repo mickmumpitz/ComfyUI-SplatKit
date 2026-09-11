@@ -1,0 +1,1334 @@
+diff --git a/diffsynth/models/wan_video_dit.py b/diffsynth/models/wan_video_dit.py
+index 1a54728..b663722 100644
+--- a/diffsynth/models/wan_video_dit.py
++++ b/diffsynth/models/wan_video_dit.py
+@@ -3,7 +3,7 @@ import torch.nn as nn
+ import torch.nn.functional as F
+ import math
+ from typing import Tuple, Optional
+-from einops import rearrange
++from einops import rearrange, repeat
+ from .utils import hash_state_dict_keys
+ from .wan_video_camera_controller import SimpleAdapter
+ try:
+@@ -23,7 +23,12 @@ try:
+     SAGE_ATTN_AVAILABLE = True
+ except ModuleNotFoundError:
+     SAGE_ATTN_AVAILABLE = False
+-    
++
++try:
++    from spas_sage_attn import spas_sage2_attn_meansim_topk_cuda
++    SPARGE_ATTN_AVAILABLE = True
++except ModuleNotFoundError:
++    SPARGE_ATTN_AVAILABLE = False
+     
+ def flash_attention(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, num_heads: int, compatibility_mode=False):
+     if compatibility_mode:
+@@ -46,6 +51,13 @@ def flash_attention(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, num_heads
+         v = rearrange(v, "b s (n d) -> b s n d", n=num_heads)
+         x = flash_attn.flash_attn_func(q, k, v)
+         x = rearrange(x, "b s n d -> b s (n d)", n=num_heads)
++    # TODO: test spas_sage2_attn_meansim_topk_cuda
++    # elif SPARGE_ATTN_AVAILABLE:
++    #     q = rearrange(q, "b s (n d) -> b n s d", n=num_heads)
++    #     k = rearrange(k, "b s (n d) -> b n s d", n=num_heads)
++    #     v = rearrange(v, "b s (n d) -> b n s d", n=num_heads)
++    #     x = spas_sage2_attn_meansim_topk_cuda(q, k, v, simthreshd1=-0.1, topk=0.5, pvthreshd=15, is_causal=False)
++    #     x = rearrange(x, "b n s d -> b s (n d)", n=num_heads)
+     elif SAGE_ATTN_AVAILABLE:
+         q = rearrange(q, "b s (n d) -> b n s d", n=num_heads)
+         k = rearrange(k, "b s (n d) -> b n s d", n=num_heads)
+@@ -186,6 +198,32 @@ class CrossAttention(nn.Module):
+         return self.o(x)
+ 
+ 
++class CrossAttentionSrcCam(nn.Module):
++    def __init__(self, dim: int, num_heads: int, eps: float = 1e-6):
++        super().__init__()
++        self.dim = dim
++        self.num_heads = num_heads
++        self.head_dim = dim // num_heads
++
++        self.q = nn.Linear(dim, dim)
++        self.k = nn.Linear(dim, dim)
++        self.v = nn.Linear(dim, dim)
++        self.o = nn.Linear(dim, dim)
++        self.norm_q = RMSNorm(dim, eps=eps)
++        self.norm_k = RMSNorm(dim, eps=eps)
++        
++        self.attn = AttentionModule(self.num_heads)
++
++    def forward(self, x, x_src, freqs, freqs_src):
++        q = self.norm_q(self.q(x))
++        k = self.norm_k(self.k(x_src))
++        v = self.v(x_src)
++        q = rope_apply(q, freqs, self.num_heads)
++        k = rope_apply(k, freqs_src, self.num_heads)
++        x = self.attn(q, k, v)
++        return self.o(x)
++
++
+ class GateModule(nn.Module):
+     def __init__(self,):
+         super().__init__()
+@@ -200,6 +238,13 @@ class DiTBlock(nn.Module):
+         self.num_heads = num_heads
+         self.ffn_dim = ffn_dim
+ 
++        self.disable_video_attn = False
++        self.use_4d_attn = False
++        self.use_mvs_attn = False
++        self.use_src_self_attn = False
++        self.use_src_cross_attn = False
++        self.use_cam_encoder = False
++
+         self.self_attn = SelfAttention(dim, num_heads, eps)
+         self.cross_attn = CrossAttention(
+             dim, num_heads, eps, has_image_input=has_image_input)
+@@ -211,7 +256,10 @@ class DiTBlock(nn.Module):
+         self.modulation = nn.Parameter(torch.randn(1, 6, dim) / dim**0.5)
+         self.gate = GateModule()
+ 
+-    def forward(self, x, context, t_mod, freqs):
++    def forward(self, x, x_src, context, t_mod, freqs, freqs_mvs, freqs_src, cam_emb, shape):
++        # breakpoint()
++        v, f, h, w = shape
++
+         has_seq = len(t_mod.shape) == 4
+         chunk_dim = 2 if has_seq else 1
+         # msa: multi-head self-attention  mlp: multi-layer perceptron
+@@ -222,12 +270,80 @@ class DiTBlock(nn.Module):
+                 shift_msa.squeeze(2), scale_msa.squeeze(2), gate_msa.squeeze(2),
+                 shift_mlp.squeeze(2), scale_mlp.squeeze(2), gate_mlp.squeeze(2),
+             )
+-        input_x = modulate(self.norm1(x), shift_msa, scale_msa)
+-        x = self.gate(x, gate_msa, self.self_attn(input_x, freqs))
++
++        # video self-attention
++        if not self.disable_video_attn:
++            input_x = modulate(self.norm1(x), shift_msa, scale_msa)
++            if self.use_4d_attn:
++                input_x = rearrange(input_x, "v fhw c -> (v fhw) c").unsqueeze(0)
++                freqs = repeat(freqs, "fhw 1 c -> (v fhw) 1 c", v=v)
++            input_x = self.self_attn(input_x, freqs)
++            if self.use_4d_attn:
++                input_x = rearrange(input_x.squeeze(0), "(v fhw) c -> v fhw c", v=v)
++            x = self.gate(x, gate_msa, input_x)
++
++        # source-view self-attention
++        if self.use_src_self_attn:
++            x_cat = torch.cat([x, x_src], dim=1)
++            shift_src, scale_src, gate_src = (
++                self.modulation_src.to(dtype=t_mod.dtype, device=t_mod.device) + t_mod[:, :3, :]).chunk(3, dim=1)
++            input_x_cat = modulate(self.norm1_src(x_cat), shift_src, scale_src)
++
++            freqs_cat = torch.cat([freqs, freqs_src], dim=0)
++            input_x_cat = self.self_attn_src(input_x_cat, freqs_cat)
++            x_cat = self.gate(x_cat, gate_src, input_x_cat)
++            len_src = x_src.shape[1]
++            x, x_src = x_cat[:, :-len_src, ...], x_cat[:, -len_src:, ...]
++
++        # source-view cross-attention
++        if self.use_src_cross_attn:
++            shift_src, scale_src, gate_src = (
++                self.modulation_src.to(dtype=t_mod.dtype, device=t_mod.device) + t_mod[:, :3, :]).chunk(3, dim=1)
++            input_x = modulate(self.norm1_src(x), shift_src, scale_src)
++            input_x_src = self.norm1_src(x_src)
++
++            input_x = self.cross_attn_src(input_x, input_x_src, freqs, freqs_src)
++            x = self.gate(x, gate_src, input_x)
++
++        # multiview self-attention
++        if self.use_mvs_attn:
++            shift_mvs, scale_mvs, gate_mvs = (
++                self.modulation_mvs.to(dtype=t_mod.dtype, device=t_mod.device) + t_mod[:, :3, :]).chunk(3, dim=1)
++            input_x = modulate(self.norm1_mvs(x), shift_mvs, scale_mvs)
++
++            # add camera embedding before multiview attention
++            if self.use_cam_encoder and cam_emb is not None:
++                cam_proj = self.cam_encoder(cam_emb)  # (v, 1, dim)
++                cam_proj = cam_proj.unsqueeze(2).unsqueeze(3).expand(-1, f, h, w, -1)  # (v, f, h, w, dim)
++                cam_proj = rearrange(cam_proj, "v f h w d -> v (f h w) d")
++                input_x = input_x + cam_proj
++
++            input_x = rearrange(input_x, "v (f h w) c -> f (v h w) c", v=v, f=f, h=h, w=w)
++            input_x = self.self_attn_mvs(input_x, freqs_mvs)
++            input_x = rearrange(input_x, "f (v h w) c -> v (f h w) c", v=v, f=f, h=h, w=w)
++
++            # projector wraps multiview attention output
++            if self.use_cam_encoder:
++                input_x = self.projector(input_x)
++
++            x = self.gate(x, gate_mvs, input_x)
++
++        # prompt cross-attention
++        context = repeat(context, "1 l c -> v l c", v=x.shape[0])
+         x = x + self.cross_attn(self.norm3(x), context)
++
++        # feed-forward network
+         input_x = modulate(self.norm2(x), shift_mlp, scale_mlp)
+         x = self.gate(x, gate_mlp, self.ffn(input_x))
+-        return x
++
++        if self.use_src_self_attn:
++            # for src self-attention, the x_src is updated as well
++            x_src = x_src + self.cross_attn(self.norm3(x_src), context)
++
++            input_x_src = modulate(self.norm2(x_src), shift_mlp, scale_mlp)
++            x_src = self.gate(x_src, gate_mlp, self.ffn(input_x_src))
++
++        return x, x_src
+ 
+ 
+ class MLP(torch.nn.Module):
+@@ -264,11 +380,57 @@ class Head(nn.Module):
+             shift, scale = (self.modulation.unsqueeze(0).to(dtype=t_mod.dtype, device=t_mod.device) + t_mod.unsqueeze(2)).chunk(2, dim=2)
+             x = (self.head(self.norm(x) * (1 + scale.squeeze(2)) + shift.squeeze(2)))
+         else:
++            if t_mod.shape[0] != 1:
++                t_mod = t_mod[:, None, :] # [b, d] -> [b, 1, d]
+             shift, scale = (self.modulation.to(dtype=t_mod.dtype, device=t_mod.device) + t_mod).chunk(2, dim=1)
+             x = (self.head(self.norm(x) * (1 + scale) + shift))
+         return x
+ 
+ 
++def pad_for_3d_conv(x, kernel_size):
++    """Pad to be divisible by kernel_size. From FramePack."""
++    _, _, t, h, w = x.shape
++    pt, ph, pw = kernel_size
++    pad_t = (pt - (t % pt)) % pt
++    pad_h = (ph - (h % ph)) % ph
++    pad_w = (pw - (w % pw)) % pw
++    if pad_t == 0 and pad_h == 0 and pad_w == 0:
++        return x
++    return F.pad(x, (0, pad_w, 0, pad_h, 0, pad_t), mode='replicate')
++
++
++class ViewPackEmbedding(nn.Module):
++    """Multi-resolution spatial patch embedding for clean source views.
++    Spatial-only downsampling: temporal dim preserved.
++    Ref: HunyuanVideoPatchEmbedForCleanLatents in FramePack.
++
++    Supported configurations (all exactly fill 4 quadrants):
++      - 4×2x views  (each 2x view → 1 quadrant)
++      - 3×2x + 4×4x  (3 quadrants from 2x + 1 quadrant from 4×4x tile)
++    """
++
++    def __init__(self, in_dim, dim, patch_size):
++        super().__init__()
++        pt, ph, pw = patch_size  # (1, 2, 2) for Wan
++        # 2x: spatial 2x downsample relative to 1x -> kernel (1, 4, 4)
++        self.proj_2x = nn.Conv3d(in_dim, dim, kernel_size=(pt, ph*2, pw*2), stride=(pt, ph*2, pw*2))
++        # 4x: spatial 4x downsample relative to 1x -> kernel (1, 8, 8)
++        self.proj_4x = nn.Conv3d(in_dim, dim, kernel_size=(pt, ph*4, pw*4), stride=(pt, ph*4, pw*4))
++
++    @torch.no_grad()
++    def initialize_from_patch_embedding(self, patch_embedding: nn.Conv3d):
++        """FramePack-style init: tile spatial dims and scale by 1/area_ratio."""
++        weight = patch_embedding.weight.detach().clone()  # (dim, in_dim, 1, 2, 2)
++        bias = patch_embedding.bias.detach().clone()
++        sd = {
++            'proj_2x.weight': repeat(weight, 'b c t h w -> b c t (h 2) (w 2)') / 4.0,
++            'proj_2x.bias': bias.clone(),
++            'proj_4x.weight': repeat(weight, 'b c t h w -> b c t (h 4) (w 4)') / 16.0,
++            'proj_4x.bias': bias.clone(),
++        }
++        self.load_state_dict(sd)
++
++
+ class WanModel(torch.nn.Module):
+     def __init__(
+         self,
+@@ -355,32 +517,121 @@ class WanModel(torch.nn.Module):
+ 
+     def forward(self,
+                 x: torch.Tensor,
++                x_src: torch.Tensor,
+                 timestep: torch.Tensor,
+                 context: torch.Tensor,
++                skeletons: Optional[torch.Tensor] = None,
++                cam_emb: Optional[torch.Tensor] = None,
++                drop_viewpack_tokens: bool = False,
+                 clip_feature: Optional[torch.Tensor] = None,
+                 y: Optional[torch.Tensor] = None,
+                 use_gradient_checkpointing: bool = False,
+                 use_gradient_checkpointing_offload: bool = False,
+                 **kwargs,
+                 ):
+-        t = self.time_embedding(
+-            sinusoidal_embedding_1d(self.freq_dim, timestep))
+-        t_mod = self.time_projection(t).unflatten(1, (6, self.dim))
++        # breakpoint()
+         context = self.text_embedding(context)
+-        
++
+         if self.has_image_input:
+             x = torch.cat([x, y], dim=1)  # (b, c_x + c_y, f, h, w)
+             clip_embdding = self.img_emb(clip_feature)
+             context = torch.cat([clip_embdding, context], dim=1)
+-        
++
+         x, (f, h, w) = self.patchify(x)
+-        
++
+         freqs = torch.cat([
+             self.freqs[0][:f].view(f, 1, 1, -1).expand(f, h, w, -1),
+             self.freqs[1][:h].view(1, h, 1, -1).expand(f, h, w, -1),
+             self.freqs[2][:w].view(1, 1, w, -1).expand(f, h, w, -1)
+         ], dim=-1).reshape(f * h * w, 1, -1).to(x.device)
+-        
++
++        # build packed views from 1x/2x/4x source views
++        v_src = x_src.shape[0]
++        if v_src == 1:
++            # 1×1x: no 2x/4x sources
++            x_src_2x, x_src_4x = None, None
++        elif v_src == 5:
++            # 1×1x + 4×2x
++            x_src, x_src_2x, x_src_4x = x_src[:1], x_src[1:], None
++        elif v_src == 8:
++            # 1×1x + 3×2x + 4×4x
++            x_src, x_src_2x, x_src_4x = x_src[:1], x_src[1:4], x_src[4:]
++        else:
++            raise ValueError(f"Unsupported number of source views: {v_src}")
++
++        # 1x source: always packed as one extra view
++        x_src, (f_src, h_src, w_src) = self.patchify(x_src)
++        if not self.use_src_attn:
++            # use viewpack for 1x source views
++            x = torch.cat([x, x_src], dim=0)
++            x_src = None
++            freqs_src = None
++            v_pack = 1
++        else:
++            # use src self/cross-attention for 1x source views
++            x_src = repeat(x_src, "1 fhw_src c -> v fhw_src c", v=x.shape[0])
++            freqs_src = torch.cat([
++                self.freqs[0][self.freqs_src_shift:f_src + self.freqs_src_shift].view(f_src, 1, 1, -1).expand(f_src, h_src, w_src, -1),
++                self.freqs[1][:h_src].view(1, h_src, 1, -1).expand(f_src, h_src, w_src, -1),
++                self.freqs[2][:w_src].view(1, 1, w_src, -1).expand(f_src, h_src, w_src, -1)
++            ], dim=-1).reshape(f_src * h_src * w_src, 1, -1).to(x.device)
++            v_pack = 0
++
++        # 2x/4x source views: packed after 1x source views
++        if self.use_viewpack:
++            if x_src_2x is not None:
++                x_src_2x = pad_for_3d_conv(x_src_2x, self.viewpack_embedding.proj_2x.kernel_size)
++                x_src_2x = self.viewpack_embedding.proj_2x(x_src_2x)  # (v_2x, dim, f, h//2, w//2)
++
++                if x_src_4x is not None:
++                    # tile 4x source views into 2x source views
++                    x_src_4x = pad_for_3d_conv(x_src_4x, self.viewpack_embedding.proj_4x.kernel_size)
++                    x_src_4x = self.viewpack_embedding.proj_4x(x_src_4x)  # (4, dim, f, h//4, w//4)
++                    x_src_4x = rearrange(x_src_4x, '(g1 g2) c f h w -> 1 c f (g1 h) (g2 w)', g1=2, g2=2)  # (1, dim, f, h//2, w//2)
++                    f_2x, h_2x, w_2x = x_src_2x.shape[2:] # crop padding surplus to match 2x source views (f, h, w)
++                    x_src_4x = x_src_4x[:, :, :f_2x, :h_2x, :w_2x]
++                    x_src_2x = torch.cat([x_src_2x, x_src_4x], dim=0)  # (4, dim, f, h//2, w//2)
++
++                # tile 2x source views into 1x source views
++                x_pack = rearrange(x_src_2x, '(g1 g2) c f h w -> 1 c f (g1 h) (g2 w)', g1=2, g2=2)
++                x_pack = x_pack[:, :, :f, :h, :w] # crop padding surplus to match 1x source views (f, h, w)
++                x_pack = rearrange(x_pack, '1 c f h w -> 1 (f h w) c')
++                x_pack = x_pack.to(dtype=x.dtype)
++                if drop_viewpack_tokens:
++                    # Keep viewpack parameters in the autograd graph across distributed ranks.
++                    zero_dependency = x_pack.float().mean().to(dtype=x.dtype) * 0.0
++                    x = x + zero_dependency
++                else:
++                    x = torch.cat([x, x_pack], dim=0)
++                    v_pack += 1
++
++        timestep = torch.cat([timestep, torch.zeros(v_pack, device=timestep.device, dtype=timestep.dtype)])
++        if skeletons is not None:
++            skeletons = torch.cat([skeletons, -torch.ones_like(skeletons[:1]).expand(v_pack, -1, -1, -1, -1)], dim=0)
++
++        # Expand cam_emb for viewpack views (zero vectors for packed source views)
++        if cam_emb is not None:
++            cam_emb = torch.cat([cam_emb, torch.zeros(v_pack, cam_emb.shape[-1],
++                device=cam_emb.device, dtype=cam_emb.dtype)], dim=0)
++            cam_emb = cam_emb.unsqueeze(1)  # (v, 1, 12)
++
++        # Compute time embeddings (after concat since timestep may have been extended)
++        t = self.time_embedding(
++            sinusoidal_embedding_1d(self.freq_dim, timestep).to(x.dtype))
++        t_mod = self.time_projection(t).unflatten(1, (6, self.dim))
++
++        if self.use_pose_encoder:
++            skeleton_latents = self.pose_encoder(skeletons)
++            skeleton_tokens = rearrange(skeleton_latents, "v c f h w -> v (f h w) c")
++            x = x + skeleton_tokens
++
++        v = x.shape[0]
++        freqs_mvs = torch.cat([
++            self.freqs[0][:v].view(v, 1, 1, -1).expand(v, h, w, -1),
++            self.freqs[1][:h].view(1, h, 1, -1).expand(v, h, w, -1),
++            self.freqs[2][:w].view(1, 1, w, -1).expand(v, h, w, -1)
++        ], dim=-1).reshape(v * h * w, 1, -1).to(x.device)
++
+         def create_custom_forward(module):
+             def custom_forward(*inputs):
+                 return module(*inputs)
+@@ -390,19 +641,24 @@ class WanModel(torch.nn.Module):
+             if self.training and use_gradient_checkpointing:
+                 if use_gradient_checkpointing_offload:
+                     with torch.autograd.graph.save_on_cpu():
+-                        x = torch.utils.checkpoint.checkpoint(
++                        x, x_src = torch.utils.checkpoint.checkpoint(
+                             create_custom_forward(block),
+-                            x, context, t_mod, freqs,
++                            x, x_src, context, t_mod, freqs, freqs_mvs, freqs_src, cam_emb, (v, f, h, w),
+                             use_reentrant=False,
+                         )
+                 else:
+-                    x = torch.utils.checkpoint.checkpoint(
++                    x, x_src = torch.utils.checkpoint.checkpoint(
+                         create_custom_forward(block),
+-                        x, context, t_mod, freqs,
++                        x, x_src, context, t_mod, freqs, freqs_mvs, freqs_src, cam_emb, (v, f, h, w),
+                         use_reentrant=False,
+                     )
+             else:
+-                x = block(x, context, t_mod, freqs)
++                x, x_src = block(x, x_src, context, t_mod, freqs, freqs_mvs, freqs_src, cam_emb, (v, f, h, w))
++
++        # Strip added views (viewpack)
++        if v_pack > 0:
++            x = x[:-v_pack, ...]
++            t = t[:-v_pack, ...]
+ 
+         x = self.head(x, t)
+         x = self.unpatchify(x, (f, h, w))
+@@ -411,7 +667,7 @@ class WanModel(torch.nn.Module):
+     @staticmethod
+     def state_dict_converter():
+         return WanModelStateDictConverter()
+-    
++
+     
+ class WanModelStateDictConverter:
+     def __init__(self):
+diff --git a/diffsynth/models/wan_video_pose_encoder.py b/diffsynth/models/wan_video_pose_encoder.py
+new file mode 100644
+index 0000000..5180625
+--- /dev/null
++++ b/diffsynth/models/wan_video_pose_encoder.py
+@@ -0,0 +1,81 @@
++import torch
++import torch.nn as nn
++import numpy as np
++from torch.nn import init
++
++# PoseEncoder is 3D version of PoseNet in MimicMotion:
++# https://github.com/Tencent/MimicMotion/blob/c053153a1d124abae8c08568925ae88debc63001/mimicmotion/modules/pose_net.py
++
++
++class PoseEncoder(nn.Module):
++    def __init__(self, out_dim=5120, in_channels=3):
++        super().__init__()
++
++        if out_dim in (5120, 1536):
++            # Wan2.1-T2V-14B / 1.3B
++            t_strides = (1, 1, 1, 2, 2)  # downsampled by 4
++            s_strides = (2, 2, 1, 2, 2)  # downsampled by 16
++            kernel_size = (3, 3, 3)
++        elif out_dim == 3072:
++            # Wan2.2-TI2V-5B
++            t_strides = (1, 1, 1, 2, 2)  # downsampled by 4
++            s_strides = (2, 2, 2, 2, 2)  # downsampled by 32
++            kernel_size = (3, 4, 4)
++        else:
++            raise ValueError(f"Invalid out_dim: {out_dim}")
++
++        strides = [(t, s, s) for t, s in zip(t_strides, s_strides)]
++
++        self.conv_layers = nn.Sequential(
++            nn.Conv3d(in_channels, in_channels, kernel_size=3, stride=1, padding=1),
++            nn.SiLU(),
++            nn.Conv3d(in_channels, 16, kernel_size=kernel_size, stride=strides[0], padding=(1, 1, 1)),
++            nn.SiLU(),
++            nn.Conv3d(16, 16, kernel_size=3, stride=1, padding=1),
++            nn.SiLU(),
++            nn.Conv3d(16, 32, kernel_size=kernel_size, stride=strides[1], padding=(1, 1, 1)),
++            nn.SiLU(),
++            nn.Conv3d(32, 32, kernel_size=3, stride=1, padding=1),
++            nn.SiLU(),
++            nn.Conv3d(32, 64, kernel_size=kernel_size, stride=strides[2], padding=(1, 1, 1)),
++            nn.SiLU(),
++            nn.Conv3d(64, 64, kernel_size=3, stride=1, padding=1),
++            nn.SiLU(),
++            nn.Conv3d(64, 128, kernel_size=kernel_size, stride=strides[3], padding=(1, 1, 1)),
++            nn.SiLU(),
++            nn.Conv3d(128, 128, kernel_size=3, stride=1, padding=1),
++            nn.SiLU(),
++            nn.Conv3d(128, 256, kernel_size=kernel_size, stride=strides[4], padding=(1, 1, 1)),
++            nn.SiLU(),
++        )
++
++        self.final_proj = nn.Conv3d(256, out_dim, kernel_size=1)
++
++        self.scale = nn.Parameter(torch.ones(1) * 2.0)
++
++        self._initialize_weights()
++
++    def _initialize_weights(self):
++        for m in self.modules():
++            if isinstance(m, nn.Conv3d):
++                # He (Kaiming) initialization in fan‑in mode
++                receptive = np.prod(m.kernel_size) * m.in_channels
++                init.normal_(m.weight, mean=0.0, std=np.sqrt(2.0 / receptive))
++                if m.bias is not None:
++                    init.zeros_(m.bias)
++        # start with zero output so model behaves like unconditional
++        init.zeros_(self.final_proj.weight)
++        if self.final_proj.bias is not None:
++            init.zeros_(self.final_proj.bias)
++
++    def forward(self, x: torch.Tensor) -> torch.Tensor:
++        """
++        x: (B, C, F, H, W) -> latent grid matching the DiT patch tokens.
++        Wan2.1 uses F/4, H/16, W/16; Wan2.2-TI2V-5B uses F/4, H/32, W/32.
++        """
++        # Wan pattern: 1 -> 4 -> 4 -> ...
++        x = torch.cat([x[:, :, :1].repeat(1, 1, 3, 1, 1), x], dim=2)
++
++        x = self.conv_layers(x)
++        x = self.final_proj(x)
++        return x * self.scale
+diff --git a/diffsynth/models/wan_video_vae.py b/diffsynth/models/wan_video_vae.py
+index 397a2e7..43057ff 100644
+--- a/diffsynth/models/wan_video_vae.py
++++ b/diffsynth/models/wan_video_vae.py
+@@ -1121,7 +1121,7 @@ class WanVideoVAE(nn.Module):
+         weight = torch.zeros((1, 1, out_T, H * self.upsampling_factor, W * self.upsampling_factor), dtype=hidden_states.dtype, device=data_device)
+         values = torch.zeros((1, 3, out_T, H * self.upsampling_factor, W * self.upsampling_factor), dtype=hidden_states.dtype, device=data_device)
+ 
+-        for h, h_, w, w_ in tqdm(tasks, desc="VAE decoding"):
++        for h, h_, w, w_ in tasks:
+             hidden_states_batch = hidden_states[:, :, :, h:h_, w:w_].to(computation_device)
+             hidden_states_batch = self.model.decode(hidden_states_batch, self.scale).to(data_device)
+ 
+@@ -1173,7 +1173,7 @@ class WanVideoVAE(nn.Module):
+         weight = torch.zeros((1, 1, out_T, H // self.upsampling_factor, W // self.upsampling_factor), dtype=video.dtype, device=data_device)
+         values = torch.zeros((1, self.z_dim, out_T, H // self.upsampling_factor, W // self.upsampling_factor), dtype=video.dtype, device=data_device)
+ 
+-        for h, h_, w, w_ in tqdm(tasks, desc="VAE encoding"):
++        for h, h_, w, w_ in tasks:
+             hidden_states_batch = video[:, :, :, h:h_, w:w_].to(computation_device)
+             hidden_states_batch = self.model.encode(hidden_states_batch, self.scale).to(data_device)
+ 
+@@ -1216,10 +1216,9 @@ class WanVideoVAE(nn.Module):
+ 
+ 
+     def encode(self, videos, device, tiled=False, tile_size=(34, 34), tile_stride=(18, 16)):
+-
+         videos = [video.to("cpu") for video in videos]
+         hidden_states = []
+-        for video in videos:
++        for video in tqdm(videos, desc="VAE encoding", disable=not tiled):
+             video = video.unsqueeze(0)
+             if tiled:
+                 tile_size = (tile_size[0] * self.upsampling_factor, tile_size[1] * self.upsampling_factor)
+@@ -1234,11 +1233,18 @@ class WanVideoVAE(nn.Module):
+ 
+ 
+     def decode(self, hidden_states, device, tiled=False, tile_size=(34, 34), tile_stride=(18, 16)):
+-        if tiled:
+-            video = self.tiled_decode(hidden_states, device, tile_size, tile_stride)
+-        else:
+-            video = self.single_decode(hidden_states, device)
+-        return video
++        hidden_states = [hidden_state.to("cpu") for hidden_state in hidden_states]
++        videos = []
++        for hidden_state in tqdm(hidden_states, desc="VAE decoding", disable=not tiled):
++            hidden_state = hidden_state.unsqueeze(0)
++            if tiled:
++                video = self.tiled_decode(hidden_state, device, tile_size, tile_stride)
++            else:
++                video = self.single_decode(hidden_state, device)
++            video = video.squeeze(0)
++            videos.append(video)
++        videos = torch.stack(videos)
++        return videos
+ 
+ 
+     @staticmethod
+diff --git a/diffsynth/pipelines/__init__.py b/diffsynth/pipelines/__init__.py
+index e2ad551..f878ad8 100644
+--- a/diffsynth/pipelines/__init__.py
++++ b/diffsynth/pipelines/__init__.py
+@@ -12,4 +12,5 @@ from .pipeline_runner import SDVideoPipelineRunner
+ from .hunyuan_video import HunyuanVideoPipeline
+ from .step_video import StepVideoPipeline
+ from .wan_video import WanVideoPipeline
++from .wan_video_spatem import WanVideoSpaTemPipeline
+ KolorsImagePipeline = SDXLImagePipeline
+diff --git a/diffsynth/pipelines/wan_video_spatem.py b/diffsynth/pipelines/wan_video_spatem.py
+new file mode 100644
+index 0000000..85b4f65
+--- /dev/null
++++ b/diffsynth/pipelines/wan_video_spatem.py
+@@ -0,0 +1,659 @@
++from ..models import ModelManager
++from ..models.wan_video_dit import WanModel
++from ..models.wan_video_pose_encoder import PoseEncoder
++from ..models.wan_video_text_encoder import WanTextEncoder
++from ..models.wan_video_vae import WanVideoVAE
++from ..models.wan_video_image_encoder import WanImageEncoder
++from ..schedulers.flow_match import FlowMatchScheduler
++from ..schedulers.bride_match import BridgeMatchScheduler
++from ..pipelines.base import BasePipeline
++from ..prompters import WanPrompter
++import torch, os
++import torch.nn as nn
++import numpy as np
++import torch.nn.functional as F
++from PIL import Image
++from tqdm import tqdm
++from typing import Optional, Union
++from functools import partial
++from einops import rearrange
++
++from ..vram_management import enable_vram_management, AutoWrappedModule, AutoWrappedLinear
++from ..models.wan_video_text_encoder import T5RelativeEmbedding, T5LayerNorm
++from ..models.wan_video_dit import RMSNorm, SelfAttention, CrossAttentionSrcCam, ViewPackEmbedding
++from ..models.wan_video_vae import RMS_norm, CausalConv3d, Upsample
++from ..utils import ModelConfig
++
++
++class WanVideoSpaTemPipeline(BasePipeline):
++
++    def __init__(self, device="cuda", torch_dtype=torch.float16, tokenizer_path=None):
++        super().__init__(device=device, torch_dtype=torch_dtype)
++        self.scheduler = FlowMatchScheduler(shift=5, sigma_min=0.0, extra_one_step=True)
++        self.prompter = WanPrompter(tokenizer_path=tokenizer_path)
++        self.text_encoder: WanTextEncoder = None
++        self.image_encoder: WanImageEncoder = None
++        self.dit: WanModel = None
++        self.vae: WanVideoVAE = None
++        self.model_names = ["text_encoder", "dit", "vae"]
++        self.height_division_factor = 16
++        self.width_division_factor = 16
++
++    def enable_vram_management(self, num_persistent_param_in_dit=None):
++        dtype = next(iter(self.text_encoder.parameters())).dtype
++        enable_vram_management(
++            self.text_encoder,
++            module_map={
++                torch.nn.Linear: AutoWrappedLinear,
++                torch.nn.Embedding: AutoWrappedModule,
++                T5RelativeEmbedding: AutoWrappedModule,
++                T5LayerNorm: AutoWrappedModule,
++            },
++            module_config=dict(
++                offload_dtype=dtype,
++                offload_device="cpu",
++                onload_dtype=dtype,
++                onload_device="cpu",
++                computation_dtype=self.torch_dtype,
++                computation_device=self.device,
++            ),
++        )
++        dtype = next(iter(self.dit.parameters())).dtype
++        enable_vram_management(
++            self.dit,
++            module_map={
++                torch.nn.Linear: AutoWrappedLinear,
++                torch.nn.Conv3d: AutoWrappedModule,
++                torch.nn.LayerNorm: AutoWrappedModule,
++                RMSNorm: AutoWrappedModule,
++            },
++            module_config=dict(
++                offload_dtype=dtype,
++                offload_device="cpu",
++                onload_dtype=dtype,
++                onload_device=self.device,
++                computation_dtype=self.torch_dtype,
++                computation_device=self.device,
++            ),
++            max_num_param=num_persistent_param_in_dit,
++            overflow_module_config=dict(
++                offload_dtype=dtype,
++                offload_device="cpu",
++                onload_dtype=dtype,
++                onload_device="cpu",
++                computation_dtype=self.torch_dtype,
++                computation_device=self.device,
++            ),
++        )
++        dtype = next(iter(self.vae.parameters())).dtype
++        enable_vram_management(
++            self.vae,
++            module_map={
++                torch.nn.Linear: AutoWrappedLinear,
++                torch.nn.Conv2d: AutoWrappedModule,
++                RMS_norm: AutoWrappedModule,
++                CausalConv3d: AutoWrappedModule,
++                Upsample: AutoWrappedModule,
++                torch.nn.SiLU: AutoWrappedModule,
++                torch.nn.Dropout: AutoWrappedModule,
++            },
++            module_config=dict(
++                offload_dtype=dtype,
++                offload_device="cpu",
++                onload_dtype=dtype,
++                onload_device=self.device,
++                computation_dtype=self.torch_dtype,
++                computation_device=self.device,
++            ),
++        )
++        if self.image_encoder is not None:
++            dtype = next(iter(self.image_encoder.parameters())).dtype
++            enable_vram_management(
++                self.image_encoder,
++                module_map={
++                    torch.nn.Linear: AutoWrappedLinear,
++                    torch.nn.Conv2d: AutoWrappedModule,
++                    torch.nn.LayerNorm: AutoWrappedModule,
++                },
++                module_config=dict(
++                    offload_dtype=dtype,
++                    offload_device="cpu",
++                    onload_dtype=dtype,
++                    onload_device="cpu",
++                    computation_dtype=dtype,
++                    computation_device=self.device,
++                ),
++            )
++        self.enable_cpu_offload()
++
++    def fetch_models(self, model_manager: ModelManager):
++        text_encoder_model_and_path = model_manager.fetch_model("wan_video_text_encoder", require_model_path=True)
++        if text_encoder_model_and_path is not None:
++            self.text_encoder, tokenizer_path = text_encoder_model_and_path
++            self.prompter.fetch_models(self.text_encoder)
++            self.prompter.fetch_tokenizer(os.path.join(os.path.dirname(tokenizer_path), "google/umt5-xxl"))
++        self.dit = model_manager.fetch_model("wan_video_dit")
++        self.vae = model_manager.fetch_model("wan_video_vae")
++        self.image_encoder = model_manager.fetch_model("wan_video_image_encoder")
++
++    @staticmethod
++    def from_model_manager(model_manager: ModelManager, torch_dtype=None, device=None):
++        if device is None:
++            device = model_manager.device
++        if torch_dtype is None:
++            torch_dtype = model_manager.torch_dtype
++        pipe = WanVideoSpaTemPipeline(device=device, torch_dtype=torch_dtype)
++        pipe.fetch_models(model_manager)
++        return pipe
++
++    @staticmethod
++    def from_pretrained(
++        torch_dtype: torch.dtype = torch.bfloat16,
++        device: Union[str, torch.device] = "cuda",
++        model_configs: list[ModelConfig] = [],
++        tokenizer_config: ModelConfig = ModelConfig(model_id="Wan-AI/Wan2.1-T2V-1.3B", origin_file_pattern="google/*"),
++        redirect_common_files: bool = True,
++        use_usp=False,
++    ):
++        # Redirect model path
++        if redirect_common_files:
++            redirect_dict = {
++                "models_t5_umt5-xxl-enc-bf16.pth": "Wan-AI/Wan2.1-T2V-1.3B",
++                "Wan2.1_VAE.pth": "Wan-AI/Wan2.1-T2V-1.3B",
++                "models_clip_open-clip-xlm-roberta-large-vit-huge-14.pth": "Wan-AI/Wan2.1-I2V-14B-480P",
++            }
++            for model_config in model_configs:
++                if model_config.origin_file_pattern is None or model_config.model_id is None:
++                    continue
++                if (
++                    model_config.origin_file_pattern in redirect_dict
++                    and model_config.model_id != redirect_dict[model_config.origin_file_pattern]
++                ):
++                    print(
++                        f"To avoid repeatedly downloading model files, ({model_config.model_id}, {model_config.origin_file_pattern}) is redirected to ({redirect_dict[model_config.origin_file_pattern]}, {model_config.origin_file_pattern}). You can use `redirect_common_files=False` to disable file redirection."
++                    )
++                    model_config.model_id = redirect_dict[model_config.origin_file_pattern]
++
++        # Initialize pipeline
++        pipe = WanVideoSpaTemPipeline(device=device, torch_dtype=torch_dtype)
++        if use_usp:
++            pipe.initialize_usp()
++
++        # Download and load models
++        model_manager = ModelManager()
++        for model_config in model_configs:
++            model_config.download_if_necessary(use_usp=use_usp)
++            model_manager.load_model(
++                model_config.path,
++                device=model_config.offload_device or device,
++                torch_dtype=model_config.offload_dtype or torch_dtype,
++            )
++
++        # Load models
++        pipe.text_encoder = model_manager.fetch_model("wan_video_text_encoder")
++        dit = model_manager.fetch_model("wan_video_dit", index=2)
++        if isinstance(dit, list):
++            pipe.dit, pipe.dit2 = dit
++        else:
++            pipe.dit = dit
++        pipe.vae = model_manager.fetch_model("wan_video_vae")
++        pipe.image_encoder = model_manager.fetch_model("wan_video_image_encoder")
++        pipe.motion_controller = model_manager.fetch_model("wan_video_motion_controller")
++        pipe.vace = model_manager.fetch_model("wan_video_vace")
++
++        # Size division factor
++        if pipe.vae is not None:
++            pipe.height_division_factor = pipe.vae.upsampling_factor * 2
++            pipe.width_division_factor = pipe.vae.upsampling_factor * 2
++
++        # Initialize tokenizer
++        tokenizer_config.local_model_path = model_configs[0].local_model_path
++        tokenizer_config.skip_download = model_configs[0].skip_download
++        tokenizer_config.download_if_necessary(use_usp=use_usp)
++        pipe.prompter.fetch_models(pipe.text_encoder)
++        pipe.prompter.fetch_tokenizer(tokenizer_config.path)
++
++        # Unified Sequence Parallel
++        if use_usp:
++            pipe.enable_usp()
++
++        return pipe
++
++    def init_spatem_modules(
++        self,
++        disable_video_attn: bool = False,
++        use_4d_attn: bool = False,
++        use_mvs_attn: bool = False,
++        use_src_self_attn: bool = False,
++        use_src_cross_attn: bool = False,
++        freqs_src_shift: int = 121,
++        use_viewpack: bool = True,
++        viewpack_dropout_prob: float = 0.0,
++        use_pose_encoder: bool = True,
++        pose_encoder_type: str = "rgb",
++        use_cam_encoder: bool = False,
++        range_4d_attn: tuple[int, int, int] = (0, None, 2),
++        range_mvs_attn: tuple[int, int, int] = (1, None, 2),
++        range_src_self_attn: tuple[int, int, int] = (0, None, 2),
++        range_src_cross_attn: tuple[int, int, int] = (0, None, 2),
++        use_lbm: bool = False,
++        fill_wpmask_with_noise: bool = False,
++    ):
++        # breakpoint()
++        device, dtype = self.dit.patch_embedding.weight.device, self.dit.patch_embedding.weight.dtype
++
++        if disable_video_attn:
++            # todo: delete self_attn layers from the model
++            if use_4d_attn:
++                raise ValueError("Cannot use 4D attention when video attention is disabled")
++            for block in self.dit.blocks:
++                block.disable_video_attn = True
++
++        if use_4d_attn:
++            b, e, s = range_4d_attn
++            for block in self.dit.blocks[b:e:s]:
++                block.use_4d_attn = True
++
++        if use_mvs_attn:
++            b, e, s = range_mvs_attn
++            for block in self.dit.blocks[b:e:s]:
++                block.use_mvs_attn = True
++
++                dim = block.self_attn.q.weight.shape[0]
++                block.modulation_mvs = nn.Parameter(block.modulation[:, :3, :].detach().clone())
++                block.norm1_mvs = nn.LayerNorm(dim, eps=block.norm1.eps, elementwise_affine=False).to(
++                    device=device, dtype=dtype
++                )
++                block.self_attn_mvs = SelfAttention(dim, block.self_attn.num_heads, block.self_attn.norm_q.eps).to(
++                    device=device, dtype=dtype
++                )
++                block.self_attn_mvs.load_state_dict(block.self_attn.state_dict(), strict=True)
++
++        if not 0.0 <= viewpack_dropout_prob <= 1.0:
++            raise ValueError("viewpack_dropout_prob should be between 0 and 1")
++        if viewpack_dropout_prob > 0.0 and not use_viewpack:
++            raise ValueError("viewpack_dropout_prob requires use_viewpack=True")
++
++        if use_viewpack:
++            viewpack_emb = ViewPackEmbedding(
++                in_dim=self.dit.patch_embedding.weight.shape[1],
++                dim=self.dit.patch_embedding.weight.shape[0],
++                patch_size=list(self.dit.patch_embedding.kernel_size),
++            )
++            viewpack_emb.initialize_from_patch_embedding(self.dit.patch_embedding)
++            self.dit.viewpack_embedding = viewpack_emb.to(device=device, dtype=dtype)
++        elif use_src_self_attn:
++            if use_src_cross_attn:
++                raise ValueError("Cannot use both src self-attention and src cross-attention")
++
++            b, e, s = range_src_self_attn
++            for block in self.dit.blocks[b:e:s]:
++                block.use_src_self_attn = True
++
++                dim = block.self_attn.q.weight.shape[0]
++                block.modulation_src = nn.Parameter(block.modulation[:, :3, :].detach().clone())
++                block.norm1_src = nn.LayerNorm(dim, eps=block.norm1.eps, elementwise_affine=False).to(
++                    device=device, dtype=dtype
++                )
++                block.self_attn_src = SelfAttention(dim, block.self_attn.num_heads, block.self_attn.norm_q.eps).to(
++                    device=device, dtype=dtype
++                )
++                block.self_attn_src.load_state_dict(block.self_attn.state_dict(), strict=True)
++        elif use_src_cross_attn:
++            b, e, s = range_src_cross_attn
++            for block in self.dit.blocks[b:e:s]:
++                block.use_src_cross_attn = True
++
++                dim = block.self_attn.q.weight.shape[0]
++                block.modulation_src = nn.Parameter(block.modulation[:, :3, :].detach().clone())
++                block.norm1_src = nn.LayerNorm(dim, eps=block.norm1.eps, elementwise_affine=False).to(
++                    device=device, dtype=dtype
++                )
++                block.cross_attn_src = CrossAttentionSrcCam(
++                    dim, block.self_attn.num_heads, block.self_attn.norm_q.eps
++                ).to(device=device, dtype=dtype)
++                block.cross_attn_src.load_state_dict(block.self_attn.state_dict(), strict=True)
++
++        if use_pose_encoder:
++            if pose_encoder_type == "rgb":
++                in_channels = 3
++            elif pose_encoder_type == "rgbd":
++                in_channels = 4
++            else:
++                raise ValueError(f"Invalid pose_encoder_type: {pose_encoder_type}")
++            pose_encoder = PoseEncoder(out_dim=self.dit.patch_embedding.out_channels, in_channels=in_channels)
++            self.dit.pose_encoder = pose_encoder.to(device=device, dtype=dtype)
++
++        if use_cam_encoder:
++            dim = self.dit.blocks[0].self_attn.q.weight.shape[0]
++            for block in self.dit.blocks:
++                block.use_cam_encoder = True
++                block.cam_encoder = nn.Linear(12, dim).to(device=device, dtype=dtype)
++                block.projector = nn.Linear(dim, dim).to(device=device, dtype=dtype)
++                block.cam_encoder.weight.data.zero_()
++                block.cam_encoder.bias.data.zero_()
++                block.projector.weight = nn.Parameter(torch.eye(dim, device=device, dtype=dtype))
++                block.projector.bias = nn.Parameter(torch.zeros(dim, device=device, dtype=dtype))
++
++        if use_lbm:
++            # TODO: hard-code for now
++            self.scheduler = BridgeMatchScheduler()
++            self.dit.fill_wpmask_with_noise = fill_wpmask_with_noise
++
++        self.dit.use_pose_encoder = use_pose_encoder
++        self.dit.use_cam_encoder = use_cam_encoder
++        self.dit.use_viewpack = use_viewpack
++        self.dit.viewpack_dropout_prob = viewpack_dropout_prob
++        self.dit.use_src_attn = use_src_self_attn or use_src_cross_attn
++        self.dit.use_lbm = use_lbm
++        self.dit.freqs_src_shift = freqs_src_shift
++
++    def denoising_model(self):
++        return self.dit
++
++    def encode_prompt(self, prompt, positive=True):
++        prompt_emb = self.prompter.encode_prompt(prompt, positive=positive)
++        return {"context": prompt_emb}
++
++    def encode_image(self, image, num_frames, height, width):
++        image = self.preprocess_image(image.resize((width, height))).to(self.device)
++        clip_context = self.image_encoder.encode_image([image])
++        msk = torch.ones(1, num_frames, height // 8, width // 8, device=self.device)
++        msk[:, 1:] = 0
++        msk = torch.concat([torch.repeat_interleave(msk[:, 0:1], repeats=4, dim=1), msk[:, 1:]], dim=1)
++        msk = msk.view(1, msk.shape[1] // 4, 4, height // 8, width // 8)
++        msk = msk.transpose(1, 2)[0]
++
++        vae_input = torch.concat(
++            [image.transpose(0, 1), torch.zeros(3, num_frames - 1, height, width).to(image.device)], dim=1
++        )
++        y = self.vae.encode([vae_input.to(dtype=self.torch_dtype, device=self.device)], device=self.device)[0]
++        y = torch.concat([msk, y])
++        y = y.unsqueeze(0)
++        clip_context = clip_context.to(dtype=self.torch_dtype, device=self.device)
++        y = y.to(dtype=self.torch_dtype, device=self.device)
++        return {"clip_feature": clip_context, "y": y}
++
++    def tensor2video(self, frames):
++        frames = rearrange(frames, "c f h w -> f h w c")
++        frames = ((frames.float() + 1) * 127.5).clip(0, 255).cpu().numpy().astype(np.uint8)
++        frames = [Image.fromarray(frame) for frame in frames]
++        return frames
++
++    def prepare_extra_input(self, latents=None):
++        return {}
++
++    def encode_video(self, input_video, tiled=True, tile_size=(34, 34), tile_stride=(18, 16)):
++        latents = self.vae.encode(
++            input_video, device=self.device, tiled=tiled, tile_size=tile_size, tile_stride=tile_stride
++        )
++        return latents
++
++    def decode_video(self, latents, tiled=True, tile_size=(34, 34), tile_stride=(18, 16)):
++        frames = self.vae.decode(latents, device=self.device, tiled=tiled, tile_size=tile_size, tile_stride=tile_stride)
++        return frames
++
++    def encode_fmask(self, mask, size):
++        f_, h_, w_ = size
++        g_ = (mask.shape[2] - 1) // (f_ - 1)
++
++        # union of the frames in each latent (the first frame is encoded independently)
++        mask = torch.cat([mask[:, :, :1].repeat(1, 1, g_ - 1, 1, 1), mask], dim=2)
++        mask = rearrange(mask, "v c (f g) h w -> v c f g h w", f=f_, g=g_)
++        mask = mask.max(dim=3).values
++
++        # interpolate along the spatial dimensions
++        mask = rearrange(mask, "v c f h w -> (v f) c h w")
++        mask = F.interpolate(mask, size=(h_, w_), mode="area")
++        mask = rearrange(mask, "(v f) c h w -> v c f h w", f=f_)
++        return mask
++
++    def encode_wpmask(self, mask, size):
++        f_, h_, w_ = size
++        g_ = (mask.shape[2] - 1) // (f_ - 1)
++
++        # intersection of the frames in each latent (the first frame is encoded independently)
++        mask = torch.cat([mask[:, :, :1].repeat(1, 1, g_ - 1, 1, 1), mask], dim=2)
++        mask = rearrange(mask, "v c (f g) h w -> v c f g h w", f=f_, g=g_)
++        mask = mask.min(dim=3).values
++
++        # interpolate along the spatial dimensions
++        mask = rearrange(mask, "v c f h w -> (v f) c h w")
++        mask = F.interpolate(mask, size=(h_, w_), mode="area")
++        mask = rearrange(mask, "(v f) c h w -> v c f h w", f=f_)
++        return mask
++
++    @torch.no_grad()
++    def __call__(
++        self,
++        prompt,
++        negative_prompt="色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走",
++        src_videos: torch.Tensor = None,
++        skeletons: torch.Tensor = None,
++        wpvideos: torch.Tensor = None,
++        wpmasks: torch.Tensor = None,
++        cam_emb: torch.Tensor = None,
++        input_image: Image.Image = None,
++        input_video: torch.Tensor = None,
++        denoising_strength: float = 1.0,
++        seed: int = None,
++        rand_device: str = "cpu",
++        height: int = 832,
++        width: int = 480,
++        num_frames: int = None,
++        cfg_scale: float = 5.0,
++        num_inference_steps: int = 50,
++        sigma_shift: float = 5.0,
++        tiled: bool = True,
++        tile_size: tuple[int, int] = (52, 30),
++        tile_stride: tuple[int, int] = (26, 15),
++        tea_cache_l1_thresh: float = None,
++        tea_cache_model_id: str = "",
++        progress_bar_cmd=partial(tqdm, desc="Denoising"),
++        progress_bar_st=None,
++        return_tensor=False,
++    ):
++        # breakpoint()
++        assert num_frames is None, "num_frames is not supported for WanVideoSpaTemPipeline"
++        assert input_image is None, "input_image is not supported for WanVideoSpaTemPipeline"
++        assert input_video is None, "input_video is not supported for WanVideoSpaTemPipeline"
++        assert tea_cache_l1_thresh is None, "tea_cache_l1_thresh is not supported for WanVideoSpaTemPipeline"
++
++        # Parameter check
++        height, width = self.check_resize_height_width(height, width)
++
++        # Tiler parameters
++        tiler_kwargs = {"tiled": tiled, "tile_size": tile_size, "tile_stride": tile_stride}
++
++        # Scheduler
++        if self.dit.use_lbm:
++            # bridge matching scheduler
++            self.scheduler.set_timesteps(num_inference_steps)
++        else:
++            # flow matching scheduler
++            self.scheduler.set_timesteps(num_inference_steps, denoising_strength=denoising_strength, shift=sigma_shift)
++
++        src_videos = src_videos.to(dtype=self.torch_dtype, device=self.device)
++        if skeletons is not None:
++            skeletons = skeletons.to(dtype=self.torch_dtype, device=self.device)
++        if wpvideos is not None:
++            wpvideos = wpvideos.to(dtype=self.torch_dtype, device=self.device)
++        if wpmasks is not None:
++            wpmasks = wpmasks.to(dtype=self.torch_dtype, device=self.device)
++        if cam_emb is not None:
++            cam_emb = cam_emb.to(dtype=self.torch_dtype, device=self.device)
++
++        if skeletons is not None:
++            num_cameras = skeletons.shape[0]
++            num_frames = skeletons.shape[2]
++        elif wpvideos is not None:
++            num_cameras = wpvideos.shape[0]
++            num_frames = wpvideos.shape[2]
++        else:
++            raise ValueError("Either skeletons or wpvideos must be provided")
++
++        # Initialize noise
++        noise_shape = (
++            num_cameras,
++            self.vae.model.z_dim,
++            (num_frames - 1) // 4 + 1,
++            height // self.vae.upsampling_factor,
++            width // self.vae.upsampling_factor,
++        )
++        noise = self.generate_noise(noise_shape, seed=seed, device=rand_device, dtype=torch.float32)
++        noise = noise.to(dtype=self.torch_dtype, device=self.device)
++
++        if input_video is not None:
++            self.load_models_to_device(["vae"])
++            input_video = self.preprocess_images(input_video)
++            input_video = torch.stack(input_video, dim=2).to(dtype=self.torch_dtype, device=self.device)
++            latents = self.encode_video(input_video, **tiler_kwargs).to(dtype=self.torch_dtype, device=self.device)
++            latents = self.scheduler.add_noise(latents, noise, timestep=self.scheduler.timesteps[0])
++        else:
++            latents = noise
++
++        # Encode source video
++        self.load_models_to_device(["vae"])
++        src_latents = self.encode_video(src_videos, **tiler_kwargs)
++        src_latents = src_latents.to(dtype=self.torch_dtype, device=self.device)
++        src_latents_nega = torch.zeros_like(src_latents)
++
++        # Latent bridge matching
++        if self.dit.use_lbm:
++            if skeletons is not None:
++                # skeleton-based: use primary src_latents as bridge source
++                lbm_src_latents = src_latents[:1].expand_as(latents)
++            elif wpvideos is not None:
++                lbm_src_latents = self.encode_video(wpvideos, **tiler_kwargs).to(
++                    dtype=self.torch_dtype, device=self.device
++                )
++                if self.dit.fill_wpmask_with_noise:
++                    wpmask_latents = self.encode_wpmask(wpmasks, size=lbm_src_latents.shape[-3:])
++                    lbm_src_latents = lbm_src_latents * wpmask_latents + noise * (1 - wpmask_latents)
++
++            latents = lbm_src_latents
++
++        # Encode prompts
++        self.load_models_to_device(["text_encoder"])
++        prompt_emb_posi = self.encode_prompt(prompt, positive=True)
++        if cfg_scale != 1.0:
++            prompt_emb_nega = self.encode_prompt(negative_prompt, positive=False)
++
++        # Encode image
++        if input_image is not None and self.image_encoder is not None:
++            self.load_models_to_device(["image_encoder", "vae"])
++            image_emb = self.encode_image(input_image, num_frames, height, width)
++        else:
++            image_emb = {}
++
++        # Extra input
++        extra_input = self.prepare_extra_input(latents)
++
++        # Denoise
++        self.load_models_to_device(["dit"])
++        for progress_id, timestep in enumerate(progress_bar_cmd(self.scheduler.timesteps)):
++            timestep = timestep.unsqueeze(0).to(dtype=self.torch_dtype, device=self.device)
++            timestep = torch.cat([timestep] * num_cameras, dim=0)
++
++            # Inference
++            noise_pred_posi = self.denoising_model()(
++                x=latents,
++                x_src=src_latents,
++                timestep=timestep,
++                skeletons=skeletons,
++                cam_emb=cam_emb,
++                **prompt_emb_posi,
++                **image_emb,
++                **extra_input,
++            )
++            if cfg_scale != 1.0:
++                noise_pred_nega = self.denoising_model()(
++                    x=latents,
++                    x_src=src_latents_nega,
++                    timestep=timestep,
++                    skeletons=skeletons,
++                    cam_emb=cam_emb,
++                    **prompt_emb_nega,
++                    **image_emb,
++                    **extra_input,
++                )
++                noise_pred = noise_pred_nega + cfg_scale * (noise_pred_posi - noise_pred_nega)
++            else:
++                noise_pred = noise_pred_posi
++
++            # Scheduler
++            latents = self.scheduler.step(noise_pred, self.scheduler.timesteps[progress_id], latents)
++
++        # Decode
++        self.load_models_to_device(["vae"])
++        pred_videos = self.decode_video(latents, **tiler_kwargs)
++
++        if return_tensor:
++            return pred_videos
++
++        self.load_models_to_device([])
++        pred_video_list = []
++        for pred_video in pred_videos:
++            pred_video_list.append(self.tensor2video(pred_video))
++        return pred_video_list
++
++
++class TeaCache:
++    def __init__(self, num_inference_steps, rel_l1_thresh, model_id):
++        self.num_inference_steps = num_inference_steps
++        self.step = 0
++        self.accumulated_rel_l1_distance = 0
++        self.previous_modulated_input = None
++        self.rel_l1_thresh = rel_l1_thresh
++        self.previous_residual = None
++        self.previous_hidden_states = None
++
++        self.coefficients_dict = {
++            "Wan2.1-T2V-1.3B": [-5.21862437e04, 9.23041404e03, -5.28275948e02, 1.36987616e01, -4.99875664e-02],
++            "Wan2.1-T2V-14B": [-3.03318725e05, 4.90537029e04, -2.65530556e03, 5.87365115e01, -3.15583525e-01],
++            "Wan2.1-I2V-14B-480P": [2.57151496e05, -3.54229917e04, 1.40286849e03, -1.35890334e01, 1.32517977e-01],
++            "Wan2.1-I2V-14B-720P": [8.10705460e03, 2.13393892e03, -3.72934672e02, 1.66203073e01, -4.17769401e-02],
++        }
++        if model_id not in self.coefficients_dict:
++            supported_model_ids = ", ".join([i for i in self.coefficients_dict])
++            raise ValueError(
++                f"{model_id} is not a supported TeaCache model id. Please choose a valid model id in ({supported_model_ids})."
++            )
++        self.coefficients = self.coefficients_dict[model_id]
++
++    def check(self, dit: WanModel, x, t_mod):
++        modulated_inp = t_mod.clone()
++        if self.step == 0 or self.step == self.num_inference_steps - 1:
++            should_calc = True
++            self.accumulated_rel_l1_distance = 0
++        else:
++            coefficients = self.coefficients
++            rescale_func = np.poly1d(coefficients)
++            self.accumulated_rel_l1_distance += rescale_func(
++                (
++                    (modulated_inp - self.previous_modulated_input).abs().mean()
++                    / self.previous_modulated_input.abs().mean()
++                )
++                .cpu()
++                .item()
++            )
++            if self.accumulated_rel_l1_distance < self.rel_l1_thresh:
++                should_calc = False
++            else:
++                should_calc = True
++                self.accumulated_rel_l1_distance = 0
++        self.previous_modulated_input = modulated_inp
++        self.step += 1
++        if self.step == self.num_inference_steps:
++            self.step = 0
++        if should_calc:
++            self.previous_hidden_states = x.clone()
++        return not should_calc
++
++    def store(self, hidden_states):
++        self.previous_residual = hidden_states - self.previous_hidden_states
++        self.previous_hidden_states = None
++
++    def update(self, hidden_states):
++        hidden_states = hidden_states + self.previous_residual
++        return hidden_states
+diff --git a/diffsynth/schedulers/__init__.py b/diffsynth/schedulers/__init__.py
+index 0ec4325..03cae00 100644
+--- a/diffsynth/schedulers/__init__.py
++++ b/diffsynth/schedulers/__init__.py
+@@ -1,3 +1,4 @@
+ from .ddim import EnhancedDDIMScheduler
+ from .continuous_ode import ContinuousODEScheduler
+ from .flow_match import FlowMatchScheduler
++from .bride_match import BridgeMatchScheduler
+diff --git a/diffsynth/schedulers/bride_match.py b/diffsynth/schedulers/bride_match.py
+new file mode 100644
+index 0000000..c157702
+--- /dev/null
++++ b/diffsynth/schedulers/bride_match.py
+@@ -0,0 +1,71 @@
++import torch, math
++
++
++class BridgeMatchScheduler:
++
++    def __init__(
++        self,
++        num_train_timesteps=1000,
++        num_inference_steps=8,
++        sigma_max=1.0,
++        bridge_noise_sigma=0.005,
++    ):
++        self.sigma_max = sigma_max
++        self.sigma_min = sigma_max / num_train_timesteps
++        self.num_train_timesteps = num_train_timesteps  # train timesteps for base model
++        self.num_inference_steps = num_inference_steps  # inference steps for bridge matching
++        self.bridge_noise_sigma = bridge_noise_sigma
++
++        self.set_timesteps(self.num_inference_steps)
++
++    def set_timesteps(self, num_inference_steps=8, training=False):
++        sigma_start = self.sigma_max
++        sigma_end = self.sigma_max / num_inference_steps
++        self.sigmas = torch.linspace(sigma_start, sigma_end, num_inference_steps)
++        self.timesteps = self.sigmas * self.num_train_timesteps
++
++        self.training = training
++
++    def retrieve_sigma(self, timestep):
++        if isinstance(timestep, torch.Tensor):
++            timestep = timestep.cpu()
++        timestep_id = torch.argmin((self.timesteps - timestep).abs())
++        sigma = self.sigmas[timestep_id]
++        return sigma
++
++    def get_noise_term(self, sigma, sample):
++        # bridge noise term == 0 when sigma == 1 or 0
++        return self.bridge_noise_sigma * (sigma * (1.0 - sigma)) ** 0.5 * torch.randn_like(sample)
++
++    def step(self, model_output, timestep, sample, to_final=False, **kwargs):
++        if isinstance(timestep, torch.Tensor):
++            timestep = timestep.cpu()
++        timestep_id = torch.argmin((self.timesteps - timestep).abs())
++        sigma = self.sigmas[timestep_id]
++        if to_final or timestep_id + 1 >= len(self.timesteps):
++            sigma_ = 0
++        else:
++            sigma_ = self.sigmas[timestep_id + 1]
++
++        prev_sample = sample + model_output * (sigma_ - sigma) + self.get_noise_term(sigma_, sample)
++        return prev_sample
++
++    def add_noise(self, tgt_sample, src_sample, timestep):
++        sigma = self.retrieve_sigma(timestep)
++        noisy_sample = sigma * src_sample + (1 - sigma) * tgt_sample + self.get_noise_term(sigma, tgt_sample)
++        return noisy_sample
++
++    def training_target(self, tgt_sample, noisy_sample, timestep):
++        sigma = self.retrieve_sigma(timestep)
++
++        target = (noisy_sample - tgt_sample) / sigma
++        return target
++
++    def denoised_sample(self, prediction, noisy_sample, timestep):
++        sigma = self.retrieve_sigma(timestep)
++
++        sample = noisy_sample - prediction * sigma
++        return sample
++
++    def training_weight(self, timestep):
++        return 1.0
+diff --git a/diffsynth/schedulers/flow_match.py b/diffsynth/schedulers/flow_match.py
+index 6a8e235..0cd3e08 100644
+--- a/diffsynth/schedulers/flow_match.py
++++ b/diffsynth/schedulers/flow_match.py
+@@ -98,7 +98,12 @@ class FlowMatchScheduler():
+     def training_target(self, sample, noise, timestep):
+         target = noise - sample
+         return target
+-    
++
++
++    def denoised_sample(self, prediction, noise, timestep):
++        sample = noise - prediction
++        return sample
++
+ 
+     def training_weight(self, timestep):
+         timestep_id = torch.argmin((self.timesteps - timestep.to(self.timesteps.device)).abs())

@@ -22,10 +22,20 @@ SOFTWARE.
 
 ---
 
-This pack redistributes third-party code under `vendored/`:
+SplatKit's own code, including its training engine, nodes, tools and player
+integration, is covered by the MIT license above. Third-party code and retained
+upstream-derived material keep their applicable terms:
 
   * MoGe (Microsoft)                        -- MIT
   * Matrix-3D `utils_3dscene`, `utils3d`    -- MIT
+  * 4DAnyone and its DiffSynth code        -- Apache-2.0
+  * 4DAnyone-derived perceptual loss and
+    retained Nerfstudio/Splatfacto material -- Apache-2.0
+  * antimatter15/splat browser renderer    -- MIT
+
+See docs/THIRD_PARTY_NOTICES.md for attribution and source locations.
+The Apache-2.0 terms are included with the external sources, for example in
+vendored/4danyone/LICENSE; they do not replace SplatKit's MIT license.
 
 The optional SphereSfM binary bundle installed into `bin/` by
 `tools/install_spheresfm.py` is NOT part of this pack and carries its own

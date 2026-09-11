@@ -4,7 +4,9 @@ This folder bundles the minimal subset of [Matrix-3D](https://github.com/Skywork
 and [MoGe](https://github.com/microsoft/MoGe) that the ComfyUI-SplatKit node pack
 needs, so the pack runs standalone — no external Matrix-3D source tree required.
 
-Everything here is copied **verbatim**; none of the upstream logic is edited. The
+The Matrix-3D and MoGe subsets described below are copied **verbatim**.
+The optional `4danyone/` generator has documented local changes; see
+[4D source provenance](../docs/4DANYONE.md#source-and-maintenance). The
 `import nvdiffrast.torch` statements at the top of `utils_3dscene/nvrender.py` and
 `utils_3dscene/pipeline_utils_3dscene.py` are satisfied at runtime by this repo's
 pure-PyTorch rasterizer shim (`../shim/`), injected via `sys.modules` — the
@@ -14,6 +16,7 @@ vendored files are not modified to achieve this.
 
 | Path | Upstream source | License |
 |------|-----------------|---------|
+| `4danyone/` | 4DAnyone generator fork, `dfa589f` | Apache-2.0; included LICENSE and third-party notices |
 | `moge/` | `Matrix-3D/code/MoGe/moge` (microsoft/MoGe) | MIT — `LICENSE-MoGe.txt` |
 | `utils3d/` | `Matrix-3D/code/MoGe/utils3d` (bundled with MoGe) | MIT — `LICENSE-MoGe.txt` |
 | `scripts/infer_panorama.py` | `Matrix-3D/code/MoGe/scripts/infer_panorama.py` | MIT — `LICENSE-MoGe.txt` |

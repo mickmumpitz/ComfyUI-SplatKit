@@ -1,7 +1,7 @@
 __pycache__/
 *.pyc
 skyseg.onnx
-# SphereSfM binary bundle -- auto-downloaded on first use, never committed. Also build artifacts.
+# Installed SphereSfM/splat backends, installer caches and build artifacts; never committed.
 bin/
 tools/linux_build
 # Test scratch output.
@@ -18,3 +18,4 @@ objinfo.json
 workflows/1_generate-dataset-hires-segmented.json
 workflows/1_generate-dataset-hires-ADV.json
 workflows/2*
+workflows/4*

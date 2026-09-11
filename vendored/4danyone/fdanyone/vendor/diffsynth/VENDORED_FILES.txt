@@ -1,0 +1,12 @@
+# Paths are relative to fdanyone/vendor/diffsynth.
+LICENSE
+UPSTREAM.md
+UPSTREAM.patch
+VENDORED_FILES.txt
+__init__.py
+models/__init__.py
+models/wan_video_dit.py
+models/wan_video_pose_encoder.py
+models/wan_video_vae.py
+schedulers/__init__.py
+schedulers/flow_match.py

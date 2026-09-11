@@ -1,0 +1,25 @@
+"""Export one synchronized 4DAnyone frame for Nerfstudio."""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+
+def main() -> None:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from fire import Fire
+
+    from fdanyone.errors import FourDAnyoneError
+    from fdanyone.nerfstudio import export_nerfstudio
+
+    try:
+        Fire(export_nerfstudio)
+    except FourDAnyoneError as exc:
+        message = " ".join(line.strip() for line in str(exc).splitlines())
+        print(f"error: {message}", file=sys.stderr)
+        raise SystemExit(1) from None
+
+
+if __name__ == "__main__":
+    main()

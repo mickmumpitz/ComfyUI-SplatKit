@@ -16,6 +16,8 @@ ComfyUI tensors, and calls the engine. Grouped by pipeline stage:
     repair.py         rebuild sparse/0 from the SfM scratch dir
     frame_repair.py   select + write back Qwen-repaired cube faces
     i2p.py            image-to-pano front end (workflow 0)
+    four_d_anyone/    person-video validation, generation and frameset export
+    splatting/        shared backend setup, frameset loading, training and playback
 
 Each module owns its own NODE_CLASS_MAPPINGS; this file merges them. A module that
 fails to import must not take the rest of the pack down with it, so every merge is
@@ -42,6 +44,12 @@ _MODULES = [
     ("repair", "rebuild-sparse node"),
     ("frame_repair", "frame-repair nodes"),
     ("i2p", "image-to-pano nodes"),
+    ("splatting.backend", "optional splat backend setup"),
+    ("four_d_anyone.generate", "4DAnyone generation nodes"),
+    ("four_d_anyone.export", "4DAnyone frameset export"),
+    ("splatting.frameset", "splat frameset loader"),
+    ("splatting.sequence", "SplatKit training and sequence nodes"),
+    ("splatting.player", "sequence player"),
 ]
 
 for _mod, _label in _MODULES:

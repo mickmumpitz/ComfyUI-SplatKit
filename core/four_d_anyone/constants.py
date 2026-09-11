@@ -1,0 +1,5 @@
+"""4DAnyone node category, model location and view types."""
+CATEGORY = "SplatKit/4DAnyone"
+MODEL_FOLDER = "splatkit"
+TYPE_MODELS = "SPLATKIT_4DANYONE_MODELS"
+TYPE_VIEWS = "SPLATKIT_4DANYONE_VIEWS"

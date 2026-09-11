@@ -5,7 +5,7 @@ ComfyUI.**
 
 Feed it one equirectangular panorama and a prompt. You get back a **COLMAP dataset**
 (`images/` + `sparse/0` + an init point cloud) that trains straight away in any COLMAP-compatible
-3D Gaussian Splatting trainer. No external venv, nothing to build.
+3D Gaussian Splatting trainer. The panorama branch needs no external venv and nothing to build.
 
 SplatKit produces **datasets, not trained splats** — training stays in whichever trainer you
 already like.
@@ -70,7 +70,10 @@ visibly degrades what WAN paints into the holes.
 
 ## Nodes
 
-Nineteen nodes, all under the **SplatKit** category; every registered class is used.
+Dataset nodes live under **SplatKit**. Six generator-specific nodes live under
+**SplatKit/4DAnyone**, and eight shared training/sequence nodes under **SplatKit/Splatting**; see [the 4D guide](docs/4DANYONE.md).
+Start with [backend setup](workflows/4danyone/4d_backend_setup.json), then open
+[video to splat](workflows/4danyone/4d_video_to_splat.json) and select your video. Missing 4D models download into `models/splatkit/` with retries and terminal progress bars; existing files are reused.
 
 - **Core** — `Dataset Project`, `MoGe Model Loader`, `Camera Plot Fly-Through (Geometry)`,
   `Camera Plot Scene Reference`, `Wan I2V Masked-Video Conditioning`.
@@ -138,13 +141,14 @@ trimesh ray-cast oracle (coverage 100%, colour MAE 0.0); 49-frame fly-through at
 __init__.py            re-exports the mappings from nodes/
 prestartup_script.py   OpenEXR codec enable, run pre-import by ComfyUI
 nodes/                 the ComfyUI layer — INPUT_TYPES, tensor unpacking, thin calls
-core/                  the engine, no ComfyUI imports — SfM, MoGe/mesh render, reprojection
+core/                  geometry, rendering, sequence helpers and backend integration
 shim/                  pure-torch / triton nvdiffrast replacement
-vendored/              third-party source: MoGe, utils3d, Matrix-3D utils
-web/                   in-graph camera path editor (JS)
-tools/                 standalone maintenance scripts
-tests/                 rasterizer + planner checks, no ComfyUI needed
-workflows/             the graphs above
+vendored/              third-party sources: MoGe, Matrix-3D, 4DAnyone
+web/                   camera path editor and sequence player
+tools/                 backend installer/exporter and maintenance scripts
+tests/                 rasterizer, planner and optional-backend checks
+workflows/             example graphs
+bin/                   installed backends and download caches (ignored by Git)
 ```
 
 Only `__init__.py` and `prestartup_script.py` sit at the root — ComfyUI hard-codes both
@@ -154,5 +158,6 @@ because the vendored tree reaches them by bare name off the `sys.path` entry
 
 ## License
 
-MIT — see [`LICENSE`](LICENSE). Bundled third-party code keeps its own license and notice files
-alongside it (`vendored/`, `docs/`).
+SplatKit's own code, including its trainer, nodes and tools, uses the
+[MIT license](LICENSE). External code and upstream-derived material retain their
+applicable terms; see [third-party notices](docs/THIRD_PARTY_NOTICES.md).
