@@ -7,6 +7,31 @@ import os
 import comfy.model_management
 
 
+def _contain_under_output(out_root, output_name):
+    """Join ``output_name`` under ``out_root`` and guarantee the result stays inside
+    ``out_root``. ``output_name`` is user-controlled (a node's dataset_name/output_name
+    text field), so an absolute path or one with ``..`` segments would otherwise escape
+    the output tree -- and callers like DatasetProject(reset=True) shutil.rmtree the
+    result, which would then delete an arbitrary directory. We resolve both paths with
+    realpath and require the base to sit at/under the realpath'd root via commonpath;
+    anything that escapes raises ValueError rather than silently retargeting."""
+    name = output_name or "default"
+    root_real = os.path.realpath(out_root)
+    base = os.path.join(root_real, name)
+    base_real = os.path.realpath(base)
+    try:
+        contained = os.path.commonpath([root_real, base_real]) == root_real
+    except ValueError:
+        # commonpath raises on mixed drives/absolute-vs-relative -- treat as an escape.
+        contained = False
+    if not contained:
+        raise ValueError(
+            f"output name {output_name!r} escapes the ComfyUI output directory "
+            f"({root_real}); use a plain name without absolute paths or '..'."
+        )
+    return base_real
+
+
 def _p2s_output_base(output_name):
     """A per-run folder directly inside ComfyUI's output directory:
     <comfy_output>/<output_name>. Everything this pack writes (control condition,
@@ -20,7 +45,7 @@ def _p2s_output_base(output_name):
         out_root = folder_paths.get_output_directory()
     except Exception:
         out_root = os.path.join(os.getcwd(), "output")
-    base = os.path.join(out_root, output_name or "default")
+    base = _contain_under_output(out_root, output_name)
     os.makedirs(base, exist_ok=True)
     return base
 
@@ -218,7 +243,7 @@ def _output_base_nomake(name):
         root = folder_paths.get_output_directory()
     except Exception:
         root = os.path.join(os.getcwd(), "output")
-    return os.path.join(root, name or "default")
+    return _contain_under_output(root, name)
 
 
 NODE_CLASS_MAPPINGS = {
