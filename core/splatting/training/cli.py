@@ -136,7 +136,9 @@ def cmd_train(args: argparse.Namespace) -> int:
     init_params = init_frame = None
     if args.init:
         # Continue from a saved model instead of a cold fit: every frame is warm.
-        init_params = torch.load(args.init, map_location="cpu")
+        # weights_only=True: the checkpoint is a plain tensor dict (see save_checkpoint),
+        # so refuse to run the arbitrary pickle in a --init file we did not write.
+        init_params = torch.load(args.init, map_location="cpu", weights_only=True)
         init_frame = args.init_frame if args.init_frame is not None else frames[0] - 1
 
     out = Path(args.out)

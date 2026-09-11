@@ -15,7 +15,7 @@ def _contain_under_output(out_root, output_name):
     result, which would then delete an arbitrary directory. We resolve both paths with
     realpath and require the base to sit at/under the realpath'd root via commonpath;
     anything that escapes raises ValueError rather than silently retargeting."""
-    name = output_name or "default"
+    name = (output_name or "default").strip()
     root_real = os.path.realpath(out_root)
     base = os.path.join(root_real, name)
     base_real = os.path.realpath(base)
@@ -24,10 +24,13 @@ def _contain_under_output(out_root, output_name):
     except ValueError:
         # commonpath raises on mixed drives/absolute-vs-relative -- treat as an escape.
         contained = False
-    if not contained:
+    # base_real == root_real means the name resolved back to the output root itself
+    # (e.g. ".", "foo/.."). That is "contained" but still catastrophic: reset=True would
+    # rmtree the whole output tree. A dataset must live in its OWN subfolder under root.
+    if not contained or base_real == root_real:
         raise ValueError(
-            f"output name {output_name!r} escapes the ComfyUI output directory "
-            f"({root_real}); use a plain name without absolute paths or '..'."
+            f"output name {output_name!r} does not resolve to a subfolder of the ComfyUI "
+            f"output directory ({root_real}); use a plain name without absolute paths or '..'."
         )
     return base_real
 

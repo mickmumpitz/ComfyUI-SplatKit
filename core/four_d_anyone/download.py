@@ -35,6 +35,14 @@ def _request(url: str, method: str = "GET", headers: dict | None = None):
     return urllib.request.urlopen(req, timeout=60)  # noqa: S310
 
 
+def _sha256_file(path: str | Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for block in iter(lambda: fh.read(1 << 24), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
 def probe(url: str) -> tuple[int, bool]:
     """(content length, supports ranges) for a URL, following redirects."""
     with _request(url, "HEAD") as r:
@@ -50,7 +58,11 @@ def download(url: str, dest: str | Path, threads: int = 8,
     dest = Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
     if dest.is_file() and dest.stat().st_size > 0:
-        return dest
+        # A cached file is only trusted if it still matches its pinned hash. Without a
+        # pin we cannot verify it, so we keep the previous behaviour and reuse it.
+        if not sha256 or _sha256_file(dest) == sha256.lower():
+            return dest
+        dest.unlink()
     tmp = dest.with_name(dest.name + ".partial")
     size, ranges = probe(url)
     done = 0
@@ -107,11 +119,7 @@ def download(url: str, dest: str | Path, threads: int = 8,
         tmp.unlink(missing_ok=True)
         raise OSError(f"download of {url} is incomplete: {got} of {size} bytes")
     if sha256:
-        h = hashlib.sha256()
-        with open(tmp, "rb") as fh:
-            for block in iter(lambda: fh.read(1 << 24), b""):
-                h.update(block)
-        if h.hexdigest() != sha256.lower():
+        if _sha256_file(tmp) != sha256.lower():
             tmp.unlink(missing_ok=True)
             raise OSError(f"download of {url} does not match its published SHA-256; "
                           "the file was removed. Try again, or check the network path.")

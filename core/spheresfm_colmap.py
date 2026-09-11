@@ -243,14 +243,35 @@ def extract_bundle_archive(archive, dest=None):
     import tarfile
     dest = dest or _BIN_DIR
     os.makedirs(dest, exist_ok=True)
+    dest_real = os.path.realpath(dest)
+
+    def _within(*parts):
+        # True only if the joined path stays inside dest -- guards archive members whose
+        # name (or a link target) contains '..' or an absolute path (directory traversal).
+        target = os.path.realpath(os.path.join(dest_real, *parts))
+        try:
+            return target == dest_real or os.path.commonpath([dest_real, target]) == dest_real
+        except ValueError:                        # different drive / absolute on Windows
+            return False
+
     if archive.endswith((".tar.gz", ".tgz")):
         with tarfile.open(archive, "r:gz") as t:
             try:
                 t.extractall(dest, filter="data")     # py3.12+: safe-paths filter
             except TypeError:
+                # Older Python has no safe filter: validate every member ourselves,
+                # including symlink/hardlink targets, before extracting.
+                for m in t.getmembers():
+                    if not _within(m.name) or (
+                            (m.issym() or m.islnk())
+                            and not _within(os.path.dirname(m.name), m.linkname)):
+                        raise ValueError(f"unsafe archive member: {m.name}")
                 t.extractall(dest)
     else:
         with zipfile.ZipFile(archive) as z:
+            for name in z.namelist():
+                if not _within(name):
+                    raise ValueError(f"unsafe archive member: {name}")
             z.extractall(dest)
     exe = os.path.join(dest, _EXE_NAME)
     if not _IS_WIN and os.path.isfile(exe):
