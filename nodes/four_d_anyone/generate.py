@@ -179,7 +179,13 @@ class FourDAnyoneGenerateViews:
         for name in BIREFNET_FILES:
             if not (selected["birefnet"].parent / name).is_file():
                 raise BackendError(f"Missing BiRefNet file: {selected['birefnet'].parent / name}")
-        config = load_config()
+        try:
+            config = load_config()
+        except BackendError as exc:
+            raise BackendError("4D backend required — see the 'How to use' note in this "
+                               "workflow for how to install it: download the installer from "
+                               "the SplatKit GitHub Releases page and run installer.bat, then "
+                               "rerun.") from exc
         backend_root = Path(config["backend_root"])
         data_dir = generated_root(num_frames, start_time, target_fps)
         source = materialize_video(video, video_path, data_dir / "uploads")
