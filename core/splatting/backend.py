@@ -1,14 +1,22 @@
-"""Managed backend discovery; never import torch or gsplat into the host."""
+"""Managed backend discovery; never import torch or gsplat into the host.
+
+Installation is intentionally NOT performed here or from any node: the ComfyUI Registry
+security policy forbids a node installing packages via subprocess at workflow runtime.
+The backend is built out-of-band by the standalone installer (installer.bat from the
+GitHub Releases page, or ``python tools/install_splat_backend.py`` in a terminal); these
+functions only DISCOVER and DESCRIBE what that installer produced under ``bin/``.
+"""
 import json
 import os
-import sys
 from . import runtime
-from .constants import LOG, PACK_ROOT
 
 class BackendError(RuntimeError):
     pass
 
-NOT_INSTALLED = "Run Splat Backend Setup with install now enabled to install or update the optional backend."
+NOT_INSTALLED = ("The optional 4D backend is not installed. Download the SplatKit backend "
+                 "installer from the GitHub Releases page, drop installer.bat into this custom "
+                 "node's folder and run it once (or run 'python tools/install_splat_backend.py' "
+                 "from a terminal). It builds a self-contained environment under bin/.")
 
 def venv_python():
     return runtime.VENV / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
@@ -61,11 +69,3 @@ def environment(extra=None):
     env.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
     env.update({str(k): str(v) for k, v in (extra or {}).items()})
     return env
-
-def provision(rebuild=False):
-    from .runner import run
-    args = [sys.executable, str(runtime.INSTALLER)]
-    if rebuild:
-        args.append("--rebuild")
-    run(args, cwd=PACK_ROOT, label=LOG)
-    return describe()
