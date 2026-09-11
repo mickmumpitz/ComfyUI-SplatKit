@@ -46,7 +46,7 @@ class SplatKitPerceptualModelLoader:
     FUNCTION = "load"
     RETURN_TYPES = (TYPE_PERCEPTUAL,)
     RETURN_NAMES = ("perceptual_model",)
-    DESCRIPTION = "Select local VGG-19 training weights from models/splatkit/perceptual. No automatic downloads."
+    DESCRIPTION = "Select local VGG-19 training weights from models/splatkit/4danyone. No automatic downloads."
 
     @classmethod
     def INPUT_TYPES(cls):

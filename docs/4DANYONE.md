@@ -12,11 +12,11 @@ been validated. Allow roughly 7.5 GB for the backend and 19 GB for models, plus
 space for outputs. Setup requires at least 20 GB free.
 
 1. Restart ComfyUI after installing or updating SplatKit.
-2. Install the isolated backend once, outside a workflow: download `installer.bat` from the
+2. Install the isolated backend once, outside a workflow: download the installer bundle
+   (`installer.bat`) from the
    [Releases page](https://github.com/mickmumpitz/ComfyUI-SplatKit/releases), drop it into this
-   custom node's folder and run it (or run `python tools/install_splat_backend.py` from a
-   terminal). Add a **Splat Backend Setup** node and queue once; it reports the status
-   and checks CUDA.
+   custom node's folder and run it. Add a **Splat Backend Setup** node and queue once; it
+   reports the status and checks CUDA.
 3. Build a 4D graph (Generate Views -> Export Frameset -> Train Sequence), select a video,
    and start with Export Frameset set to **0-20** and training at **draft**.
    Download the models below and select them in both model loader nodes before queuing.
@@ -47,14 +47,14 @@ into `ComfyUI/models/splatkit/4danyone/`:
 
 Download `model.safetensors`, `config.json`, `birefnet.py`, and `BiRefNet_config.py`
 from [the pinned BiRefNet revision](https://huggingface.co/ZhengPeng7/BiRefNet/tree/e2bf8e4460fc8fa32bba5ea4d94b3233d367b0e4)
-into `ComfyUI/models/splatkit/4danyone/birefnet/`. Select its `model.safetensors`
+into `ComfyUI/models/splatkit/birefnet/`. Select its `model.safetensors`
 in the loader; the other three files must sit alongside it.
 
 Download [SAM 3D Body bf16](https://huggingface.co/Comfy-Org/sam-3d-body/resolve/main/detection/sam_3d_body_dinov3_bf16.safetensors)
 into `ComfyUI/models/detection/` and select it in 4DAnyone Model Loader.
 
 For Train Sequence, download [VGG-19 perceptual weights](https://huggingface.co/AntResearch/4DAnyone/resolve/7850985888b56aabf09e69480b73248f1a76bcbe/perceptual/imagenet-vgg-verydeep-19-conv.safetensors)
-into `ComfyUI/models/splatkit/perceptual/` and select the file in Splat Perceptual
+into `ComfyUI/models/splatkit/4danyone/` and select the file in Splat Perceptual
 Model Loader. Generation alone does not require VGG-19.
 
 The loaders validate local paths. SAM 3D Body loads inside ComfyUI when pose estimation
@@ -62,7 +62,7 @@ runs; 4DAnyone, the VAE, LoRA, BiRefNet and VGG-19 load in the separate backend 
 their stages run. Backend model paths are not compatible with ComfyUI's MODEL or VAE sockets.
 
 Additional model roots can be configured in `extra_model_paths.yaml` using
-`splatkit_4danyone`, `splatkit_perceptual`, and the core `detection` key.
+`splatkit_4danyone`, `splatkit_birefnet`, `splatkit_perceptual`, and the core `detection` key.
 
 Paths below are relative to ComfyUI, except the backend paths inside this node pack.
 
@@ -70,9 +70,9 @@ Paths below are relative to ComfyUI, except the backend paths inside this node p
 |---|---|
 | Backend Python and copied generator | `custom_nodes/ComfyUI-SplatKit/bin/splat_backend/` |
 | Installer caches | `custom_nodes/ComfyUI-SplatKit/bin/splat_backend_cache/` |
-| 4DAnyone checkpoint, VAE, prompt context and Turbo LoRA | `models/splatkit/4danyone/` |
-| BiRefNet weights, configuration and code | `models/splatkit/4danyone/birefnet/` |
-| VGG-19 training features | `models/splatkit/perceptual/` |
+| 4DAnyone checkpoint, VAE, prompt context, Turbo LoRA and VGG-19 | `models/splatkit/4danyone/` |
+| BiRefNet weights, configuration and code | `models/splatkit/birefnet/` |
+| VGG-19 training features | `models/splatkit/4danyone/` |
 | SAM 3D Body | `models/detection/` |
 | Generated views and pose caches | `output/splatkit/4danyone/` |
 | Exported framesets | `output/splatkit/framesets/` |
@@ -83,10 +83,10 @@ SAM 3D Body loads from ComfyUI's registered `detection` folders; select the inst
 in 4DAnyone Model Loader.
 
 For files downloaded before this layout change, move the four generator files from
-`models/splatkit-4danyone/` into `models/splatkit/4danyone/`, and move its `birefnet/`
-folder into `models/splatkit/4danyone/`. VGG-19 and SAM 3D Body locations are unchanged.
-Do not overwrite existing destination files. The node does not automatically move your old
-model folders.
+`models/splatkit-4danyone/` into `models/splatkit/4danyone/`, move its `birefnet/`
+folder into `models/splatkit/birefnet/`, and move the VGG-19 weights into
+`models/splatkit/4danyone/`. SAM 3D Body location is unchanged. Do not overwrite existing
+destination files. The node does not automatically move your old model folders.
 
 Pose estimation and core splat previews run in ComfyUI. Generation, frameset export
 and training use the isolated Python 3.11 / torch 2.8.0 / CUDA 12.8 / gsplat 1.4.0

@@ -26,21 +26,24 @@ class ModelLoaderTests(unittest.TestCase):
         self.addCleanup(temp.cleanup)
         self.root = Path(temp.name)
         self.names = {"checkpoint": "model.safetensors", "vae": "Wan2.2_VAE.pth",
-                      "prompt_context": "prompt_context.safetensors", "birefnet": "birefnet/model.safetensors",
+                      "prompt_context": "prompt_context.safetensors", "birefnet": "model.safetensors",
                       "sam3d_body": "sam_3d_body_dinov3_bf16.safetensors", "turbo_lora": "none"}
-        self.generator = self.root / "splatkit-4danyone"
+        self.generator = self.root / "splatkit" / "4danyone"
+        self.birefnet = self.root / "splatkit" / "birefnet"
         self.detection = self.root / "detection"
         self.dirs = {"splatkit_4danyone": ([str(self.generator)], set()),
+                     "splatkit_birefnet": ([str(self.birefnet)], set()),
                      "detection": ([str(self.detection)], {".safetensors"})}
+        bases = {"sam3d_body": self.detection, "birefnet": self.birefnet}
         for kind, name in self.names.items():
             if name == "none":
                 continue
-            base = self.detection if kind == "sam3d_body" else self.generator
-            file = base / name
+            file = bases.get(kind, self.generator) / name
             file.parent.mkdir(parents=True, exist_ok=True)
             file.write_bytes(kind.encode())
         for name in paths.BIREFNET_FILES:
-            (self.generator / "birefnet" / name).write_bytes(name.encode())
+            self.birefnet.mkdir(parents=True, exist_ok=True)
+            (self.birefnet / name).write_bytes(name.encode())
         folder_paths = types.ModuleType("folder_paths")
         folder_paths.models_dir = str(self.root)
         folder_paths.folder_names_and_paths = self.dirs
@@ -65,15 +68,15 @@ class ModelLoaderTests(unittest.TestCase):
                 paths.resolve_model("checkpoint", name)
 
     def test_birefnet_requires_config_and_code_files(self):
-        (self.generator / "birefnet/config.json").unlink()
+        (self.birefnet / "config.json").unlink()
         with self.assertRaisesRegex(generate.BackendError, "config.json"):
             generate.FourDAnyoneModelLoader().load(**self.names)
 
     def test_partial_downloads_do_not_appear_in_choices(self):
-        partial = self.generator / ".download/4danyone/model.safetensors"
+        partial = self.birefnet / ".download/model.safetensors"
         partial.parent.mkdir(parents=True)
         partial.write_bytes(b"partial")
-        self.assertEqual(paths.model_options("birefnet"), ["birefnet/model.safetensors"])
+        self.assertEqual(paths.model_options("birefnet"), ["model.safetensors"])
 
     def test_turbo_requires_selected_lora_before_backend_setup(self):
         bundle, = generate.FourDAnyoneModelLoader().load(**self.names)
@@ -104,27 +107,27 @@ class ModelLoaderTests(unittest.TestCase):
         args = run.call_args.args[0]
         for flag, value in (("--vae_path", bundle["vae"]), ("--prompt_context_path", bundle["prompt_context"]),
                             ("--checkpoint_path", bundle["checkpoint"]),
-                            ("--foreground_model_dir", str(self.generator / "birefnet"))):
+                            ("--foreground_model_dir", str(self.birefnet))):
             self.assertEqual(args[args.index(flag) + 1], value)
         self.assertNotIn("--turbo_lora_path", args)
         self.assertEqual(pose.call_args.args[-1], Path(bundle["sam3d_body"]))
-        self.assertEqual(result["foreground_model_dir"], str(self.generator / "birefnet"))
+        self.assertEqual(result["foreground_model_dir"], str(self.birefnet))
 
     def test_backend_resolves_selected_vae_and_context(self):
         base = assets.resolve_base_assets(self.root, vae_path=self.generator / self.names["vae"],
                                          prompt_context_path=self.generator / self.names["prompt_context"])
         self.assertEqual(base.vae, self.generator / self.names["vae"])
-        self.assertEqual(assets.resolve_foreground_model(path=self.generator / "birefnet"), self.generator / "birefnet")
+        self.assertEqual(assets.resolve_foreground_model(path=self.birefnet), self.birefnet)
 
     def test_perceptual_weights_require_explicit_local_file(self):
         with self.assertRaises(FileNotFoundError):
             weights.perceptual_weights()
         with self.assertRaises(FileNotFoundError):
             weights.perceptual_weights(self.root / "missing")
-        local = self.root / "splatkit/perceptual/vgg.safetensors"
-        local.parent.mkdir(parents=True)
+        local = self.generator / "imagenet-vgg-verydeep-19-conv.safetensors"
+        local.parent.mkdir(parents=True, exist_ok=True)
         local.write_bytes(b"vgg")
-        self.assertEqual(train.SplatKitPerceptualModelLoader().load("vgg.safetensors"), (str(local),))
+        self.assertEqual(train.SplatKitPerceptualModelLoader().load(local.name), (str(local),))
         self.assertEqual(weights.perceptual_weights(local), local)
 
     def test_train_requires_loader_before_backend_setup(self):

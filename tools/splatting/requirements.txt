@@ -1,5 +1,6 @@
 # Installed only in the managed Windows Python 3.11 / CUDA 12.8 environment.
-# gsplat uses the SHA-256-verified wheel pinned in core/splatting/runtime.py.
+# gsplat is supplied as a SHA-256-verified prebuilt wheel by the standalone installer
+# bundle (installer.bat, on the GitHub Releases page), not from this list.
 torch==2.8.0
 torchvision==0.23.0
 gsplat==1.4.0

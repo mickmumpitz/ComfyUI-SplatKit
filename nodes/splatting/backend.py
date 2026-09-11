@@ -19,8 +19,8 @@ class SplatBackendSetup:
     OUTPUT_NODE = True
     DESCRIPTION = ("Reports the optional Windows CUDA backend status (the self-contained view "
                    "generator + splat trainer environment). It does NOT install: download the "
-                   "installer from the GitHub Releases page and run installer.bat (or 'python "
-                   "tools/install_splat_backend.py') once, then this node confirms it is ready.")
+                   "installer bundle from the GitHub Releases page and run installer.bat once, "
+                   "then this node confirms it is ready.")
 
     @classmethod
     def INPUT_TYPES(cls):

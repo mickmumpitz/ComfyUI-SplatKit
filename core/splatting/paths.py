@@ -6,9 +6,9 @@ PERCEPTUAL_FOLDER_KEY = "splatkit_perceptual"
 
 def perceptual_options():
     import folder_paths
-    folder_paths.add_model_folder_path(PERCEPTUAL_FOLDER_KEY, str(training_models_root() / "perceptual"))
+    folder_paths.add_model_folder_path(PERCEPTUAL_FOLDER_KEY, str(training_models_root() / "4danyone"))
     folder_paths.folder_names_and_paths[PERCEPTUAL_FOLDER_KEY][1].add(".safetensors")
-    return folder_paths.get_filename_list(PERCEPTUAL_FOLDER_KEY)
+    return [n for n in folder_paths.get_filename_list(PERCEPTUAL_FOLDER_KEY) if "vgg" in n.lower()]
 
 
 def resolve_perceptual(name):

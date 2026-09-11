@@ -13,7 +13,6 @@ GENERATOR_SOURCE = PACK_ROOT / "vendored" / "4danyone"
 TRAINER_SOURCE = PACK_ROOT / "core" / "splatting" / "training"
 WORKER = PACK_ROOT / "tools" / "run_splat_training.py"
 REQUIREMENTS = PACK_ROOT / "tools" / "splatting" / "requirements.txt"
-INSTALLER = PACK_ROOT / "tools" / "install_splat_backend.py"
 BACKEND = ROOT / "splat_backend"
 VENV = BACKEND / "venv"
 CHECKOUT = BACKEND / "4DAnyone"
@@ -24,9 +23,10 @@ TORCH = "2.8.0"
 TORCHVISION = "0.23.0"
 CUDA = "12.8"
 GSPLAT = "1.4.0"
-WHEEL_NAME = "gsplat-1.4.0+pt28cu128-cp311-cp311-win_amd64.whl"
-WHEEL_SHA256 = "a3026d43405bca2be175c8fbce986ea1e91c40226887011eac6c72964640149f"
-WHEEL_URL = "https://github.com/mickmumpitz/ComfyUI-SplatKit/releases/download/gsplat-1.4.0-pt28-cu128/" + WHEEL_NAME
+# The gsplat wheel (URL, filename and SHA-256) is owned by the standalone installer that
+# ships on the GitHub Releases page, not by this pack -- nothing here downloads or installs
+# a binary. The backend "contract" below versions the environment by library versions; the
+# installer verifies the wheel it fetches against its own pinned hash.
 
 
 def source_id(source):
@@ -58,7 +58,7 @@ def requirements(path):
 def expected():
     return {"schema": 2, "python": PYTHON, "abi": "cp311", "platform": sys.platform,
             "machine": platform.machine().lower(), "torch": TORCH, "torchvision": TORCHVISION,
-            "cuda": CUDA, "gsplat": GSPLAT, "wheel_sha256": WHEEL_SHA256,
+            "cuda": CUDA, "gsplat": GSPLAT,
             "requirements": requirements(REQUIREMENTS),
             "generator_requirements": requirements(GENERATOR_SOURCE / "requirements.txt")}
 

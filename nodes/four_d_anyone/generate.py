@@ -79,7 +79,7 @@ class FourDAnyoneModelLoader:
                 ("checkpoint", "4DAnyone model.safetensors in models/splatkit/4danyone."),
                 ("vae", "Wan2.2_VAE.pth in models/splatkit/4danyone."),
                 ("prompt_context", "prompt_context.safetensors in models/splatkit/4danyone."),
-                ("birefnet", "birefnet/model.safetensors, alongside config.json, birefnet.py and BiRefNet_config.py."),
+                ("birefnet", "model.safetensors in models/splatkit/birefnet, alongside config.json, birefnet.py and BiRefNet_config.py."),
                 ("sam3d_body", "SAM 3D Body weights in models/detection."),
                 ("turbo_lora", "Published rank-64 Turbo LoRA in models/splatkit/4danyone. Choose none for base generation."),
             )}}

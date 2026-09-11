@@ -27,9 +27,6 @@ from splatkit_test.core.splatting import backend, sequence, runner
 spec = importlib.util.spec_from_file_location("splatkit_test.nodes.splatting.sequence", ROOT / "nodes" / "splatting" / "sequence.py")
 train = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(train)
-spec = importlib.util.spec_from_file_location("install_splat_backend", ROOT / "tools" / "install_splat_backend.py")
-setup = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(setup)
 
 class SplatBackendTests(unittest.TestCase):
     def test_generation_progress_reaches_terminal_and_comfy_bar(self):
@@ -248,17 +245,6 @@ with _get_progress_bar_context(desc='Download test.bin', log_level=30, total=102
             self.assertNotEqual(before, runtime.trainer_id())
             self.assertEqual(contract, runtime.expected())
 
-    def test_dependency_and_wheel_hash_changes_require_setup_but_url_does_not(self):
-        before = runtime.expected()
-        with patch.object(runtime, "WHEEL_URL", "https://example.invalid/mirror.whl"):
-            self.assertEqual(before, runtime.expected())
-        with patch.object(runtime, "WHEEL_SHA256", "0" * 64):
-            self.assertNotEqual(before, runtime.expected())
-        req = self.root / "requirements.txt"
-        req.write_text(runtime.REQUIREMENTS.read_text() + "\npillow==1.0\n")
-        with patch.object(runtime, "REQUIREMENTS", req):
-            self.assertNotEqual(before, runtime.expected())
-
     def test_generator_edit_requires_copy_refresh_only(self):
         source = self.root / "generator"
         source.mkdir()
@@ -333,126 +319,6 @@ runpy.run_path(sys.argv[1], run_name='__main__')
             self.assertEqual(backend.load_config(require_generator=False)["python"], sys.executable)
             with self.assertRaisesRegex(backend.BackendError, "checkout is missing"):
                 backend.load_config(require_generator=True)
-
-    def test_setup_rejects_unverified_download(self):
-        with self.assertRaises(RuntimeError):
-            setup.download("https://example.invalid/file", self.root / "file", "")
-
-    def test_generator_refresh_rolls_back_without_reinstalling_dependencies(self):
-        target = self.root / "splat_backend"
-        checkout = target / "4DAnyone"
-        checkout.mkdir(parents=True)
-        (checkout / "inference.py").write_text("old generator")
-        source = self.root / "source"
-        source.mkdir()
-        (source / "inference.py").write_text("new generator")
-        manifest = target / "manifest.json"
-        manifest.write_text('{"old": true}')
-        with patch.object(setup.runtime, "BACKEND", target), \
-             patch.object(setup.runtime, "CHECKOUT", checkout), \
-             patch.object(setup.runtime, "GENERATOR_SOURCE", source), \
-             patch.object(setup.runtime, "MANIFEST", manifest), \
-             patch.object(setup, "run") as run, \
-             patch.object(setup, "verify", side_effect=RuntimeError("smoke failed")):
-            with self.assertRaisesRegex(RuntimeError, "smoke failed"):
-                setup.refresh_sources({}, "new")
-            self.assertEqual((checkout / "inference.py").read_text(), "old generator")
-            self.assertEqual(json.loads(manifest.read_text()), {"old": True})
-            run.assert_not_called()
-        with patch.object(setup.runtime, "BACKEND", target), \
-             patch.object(setup.runtime, "CHECKOUT", checkout), \
-             patch.object(setup.runtime, "GENERATOR_SOURCE", source), \
-             patch.object(setup.runtime, "MANIFEST", manifest), \
-             patch.object(setup, "run") as run, patch.object(setup, "verify"):
-            setup.refresh_sources({}, "new")
-            self.assertEqual((checkout / "inference.py").read_text(), "new generator")
-            self.assertEqual(json.loads(manifest.read_text())["generator_source_id"], "new")
-            run.assert_not_called()
-        self.assertFalse(checkout.with_name("4DAnyone.previous").exists())
-
-    def test_current_environment_refreshes_generator_without_downloads(self):
-        target = self.root / "splat_backend"
-        target.mkdir()
-        manifest = target / "manifest.json"
-        contract = runtime.expected()
-        manifest.write_text(json.dumps({"contract": contract, "cuda_smoke_test": True,
-                                       "generator_source_id": "old"}))
-        with patch.object(setup.runtime, "ROOT", self.root), \
-             patch.object(setup.runtime, "BACKEND", target), \
-             patch.object(setup.runtime, "MANIFEST", manifest), \
-             patch.object(setup, "python", return_value=Path(sys.executable)), \
-             patch.object(setup, "refresh_sources") as refresh, patch.object(setup, "download") as download, \
-             patch.object(setup, "clean_cache") as clean:
-            setup.install()
-            refresh.assert_called_once_with(contract, runtime.source_id(runtime.GENERATOR_SOURCE), retire_legacy=False)
-            download.assert_not_called()
-            clean.assert_called_once_with()
-
-    def test_clean_cache_is_best_effort_and_targets_the_uv_cache(self):
-        tools = self.root / "cache"
-        tools.mkdir()
-        # No uv.exe yet: nothing to run, and no crash.
-        with patch.object(setup.runtime, "TOOLS", tools), patch.object(setup, "run") as run:
-            setup.clean_cache()
-            run.assert_not_called()
-        # With uv present, it delegates to `uv cache clean` and swallows failures.
-        (tools / "uv.exe").write_text("stub")
-        with patch.object(setup.runtime, "TOOLS", tools), \
-             patch.object(setup, "run", side_effect=subprocess.CalledProcessError(1, "uv")) as run:
-            setup.clean_cache()  # must not raise
-            self.assertEqual(list(run.call_args.args[0]), [tools / "uv.exe", "cache", "clean"])
-
-    def test_keep_cache_skips_cleanup_on_refresh(self):
-        target = self.root / "splat_backend"
-        target.mkdir()
-        manifest = target / "manifest.json"
-        contract = runtime.expected()
-        manifest.write_text(json.dumps({"contract": contract, "cuda_smoke_test": True,
-                                       "generator_source_id": "old"}))
-        with patch.object(setup.runtime, "ROOT", self.root), \
-             patch.object(setup.runtime, "BACKEND", target), \
-             patch.object(setup.runtime, "MANIFEST", manifest), \
-             patch.object(setup, "python", return_value=Path(sys.executable)), \
-             patch.object(setup, "refresh_sources"), patch.object(setup, "download"), \
-             patch.object(setup, "clean_cache") as clean:
-            setup.install(keep_cache=True)
-            clean.assert_not_called()
-
-    def test_setup_rejects_archive_traversal(self):
-        import zipfile
-        archive = self.root / "bad.zip"
-        with zipfile.ZipFile(archive, "w") as z:
-            z.writestr("../escaped.txt", "no")
-        with self.assertRaises(RuntimeError):
-            setup.extract(archive, self.root / "extract")
-        self.assertFalse((self.root / "escaped.txt").exists())
-
-    def test_setup_deletion_is_contained(self):
-        with self.assertRaises(RuntimeError):
-            setup.remove_backend(self.root)
-        self.assertTrue(self.root.is_dir())
-
-    def test_failed_upgrade_restores_previous_install(self):
-        target = self.root / "splat_backend"
-        previous = self.root / "splat_backend.previous"
-        target.mkdir()
-        manifest = target / "manifest.json"
-        manifest.write_text('{"old":true}')
-        (target / "keep").write_text("previous backend")
-        class Space:
-            free = 30 * 10**9
-        with patch.object(setup.runtime, "ROOT", self.root), \
-             patch.object(setup.runtime, "BACKEND", target), \
-             patch.object(setup.runtime, "MANIFEST", manifest), \
-             patch.object(setup.runtime, "VENV", target / "venv"), \
-             patch.object(setup.runtime, "expected", return_value={}), \
-             patch.object(setup, "download", return_value=self.root / "archive"), \
-             patch.object(setup, "extract"), patch.object(setup.shutil, "disk_usage", return_value=Space()), \
-             patch.object(setup, "run", side_effect=RuntimeError("install failed")):
-            with self.assertRaisesRegex(RuntimeError, "install failed"):
-                setup.install(rebuild=True)
-        self.assertEqual((target / "keep").read_text(), "previous backend")
-        self.assertFalse(previous.exists())
 
     def test_cancellation_kills_subprocess(self):
         started = time.monotonic()

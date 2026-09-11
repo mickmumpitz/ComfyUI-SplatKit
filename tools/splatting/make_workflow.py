@@ -38,7 +38,7 @@ NOTE_MODELS = ("#222", "#000")
 GY, GH, Y0 = -40, 1060, 100
 
 HOW_TO = """## How to use
-1. Install the optional backend once, outside ComfyUI: download `installer.bat` from the GitHub Releases page and run it (or run `python tools/install_splat_backend.py`). Then open `4d_backend_setup.json` and queue once; **Splat Backend Setup** confirms it is Ready.
+1. Install the optional backend once, outside ComfyUI: download the installer bundle (`installer.bat`) from the GitHub Releases page and run it. Then add a **Splat Backend Setup** node and queue once; it confirms the backend is Ready.
 2. Download the files listed in docs/4DANYONE.md and refresh ComfyUI's model lists.
 3. Select each file in 4DAnyone Model Loader and Splat Perceptual Model Loader, select your video, and queue.
 4. Inspect the generated view grid and the Sequence Player. Drag to orbit, space to play.
@@ -56,9 +56,9 @@ and is not exposed by this 4D integration. See docs/4DANYONE.md."""
 
 MODELS = """## Models
 Download links: [docs/4DANYONE.md](https://github.com/mickmumpitz/ComfyUI-SplatKit/blob/main/docs/4DANYONE.md). No automatic model downloads.
-- **4DAnyone**: models/splatkit/4danyone (checkpoint, VAE, Turbo, prompt context).
-- **BiRefNet**: models/splatkit/4danyone/birefnet.
-- **VGG-19** training loss: models/splatkit/perceptual.
+- **4DAnyone**: models/splatkit/4danyone (checkpoint, VAE, Turbo, prompt context, VGG-19).
+- **BiRefNet**: models/splatkit/birefnet.
+- **VGG-19** training loss: models/splatkit/4danyone.
 - **SAM 3D Body**: models/detection (ComfyUI's model).
 
 Body pose and core previews run in ComfyUI. Generation and training run in the isolated backend.
@@ -103,7 +103,7 @@ def build(info: dict, *, clip: str = "your_clip.mp4", preset: str | None = None,
     ids["report"] = g.node("PreviewAny", (1020, Y0 + 460), (360, 130), title="Input report")
     ids["models"] = g.node(P + "4DAnyoneModelLoader", (1020, Y0 + 620), (540, 240), values={
         "checkpoint": "model.safetensors", "vae": "Wan2.2_VAE.pth",
-        "prompt_context": "prompt_context.safetensors", "birefnet": "birefnet/model.safetensors",
+        "prompt_context": "prompt_context.safetensors", "birefnet": "model.safetensors",
         "sam3d_body": "sam_3d_body_dinov3_bf16.safetensors",
         "turbo_lora": "Wan22_TI2V_5B_Turbo_lora_rank_64_fp16.safetensors"})
     _paint(g, ids["models"], LOADER, LOADER_BG)
@@ -206,7 +206,7 @@ def main() -> int:
     # Separate setup graph lets first-time users install without a valid input video.
     setup = Graph(info)
     setup.node(P + "SplatBackendSetup", (100, 100), (440, 140))
-    setup.md_note("Install the optional Windows CUDA backend outside ComfyUI: download installer.bat from the GitHub Releases page and run it (or run 'python tools/install_splat_backend.py'). Queue once and this node reports whether the backend is Ready.\nThen open 4d_video_to_splat.json.", (100, 300), (440, 180), "Install optional 4D backend")
+    setup.md_note("Install the optional Windows CUDA backend outside ComfyUI: download the installer bundle (installer.bat) from the GitHub Releases page and run it. Queue once and this node reports whether the backend is Ready.\nThen open 4d_video_to_splat.json.", (100, 300), (440, 180), "Install optional 4D backend")
     setup.dump(out.with_name("4d_backend_setup.json"))
     problems = validate(out, info) + validate(out.with_name("4d_backend_setup.json"), info)
     print(f"wrote {out}: {len(g.nodes)} nodes, {len(g.links)} links, {len(groups)} groups")
