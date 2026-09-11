@@ -64,14 +64,16 @@ def rotate_features_rest(features_rest: np.ndarray, rot: np.ndarray) -> np.ndarr
 
 def _self_test() -> None:
     rng = np.random.default_rng(1)
-    q = rng.normal(size=4); q /= np.linalg.norm(q)
+    q = rng.normal(size=4)
+    q /= np.linalg.norm(q)
     w, x, y, z = q
     rot = np.array([[1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
                     [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
                     [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)]])
     f = rng.normal(size=(16, 3))
     m = sh_rotation(rot)
-    d = rng.normal(size=(50, 3)); d /= np.linalg.norm(d, axis=1, keepdims=True)
+    d = rng.normal(size=(50, 3))
+    d /= np.linalg.norm(d, axis=1, keepdims=True)
     old = sh_basis(d @ rot) @ f                            # old function at R^T d
     new = sh_basis(d) @ (m @ f)                            # rotated function at d
     err = np.abs(old - new).max()
