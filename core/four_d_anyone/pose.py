@@ -67,7 +67,7 @@ def _load_model(model_file: str):
     path = Path(model_file)
     if not path.is_file():
         raise FileNotFoundError(f"SAM 3D Body weights not found: {path}")
-    sd = comfy.utils.load_torch_file(path, safe_load=True)
+    sd = comfy.utils.load_torch_file(str(path), safe_load=True)
     sd = {k.replace(".layers.0.0.", ".layers.0."): v for k, v in sd.items()}
 
     load_device = comfy.model_management.get_torch_device()
