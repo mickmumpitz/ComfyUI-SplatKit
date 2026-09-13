@@ -84,17 +84,10 @@ if !errorlevel! neq 0 (
 
 REM ----------------------------------------------------- 3. optional backend
 echo.
-echo   [3/3] The 4D generator and the splat trainer use a separate,
-echo         self-contained CUDA backend ^(about 7.5 GB, Windows + NVIDIA only^).
-echo         The panorama-to-dataset pipeline does NOT need it.
-echo.
-set "DOBACKEND=Y"
-set /p "DOBACKEND=Install the CUDA backend now? [Y/n]: "
-if /i "!DOBACKEND!"=="n" goto :skip_backend
-
-echo.
-echo   Building the backend -- this downloads several GB and can take a while.
-echo   Leave the window open; it prints progress as it goes.
+echo   [3/3] Building the self-contained CUDA backend for the 4D generator
+echo         and the splat trainer ^(about 7.5 GB, Windows + NVIDIA only^).
+echo         This downloads several GB and can take a while -- leave the
+echo         window open; it prints progress as it goes.
 echo.
 "!PYEXE!" "!PACK_DIR!\tools\install_splat_backend.py"
 if !errorlevel! neq 0 (
@@ -105,13 +98,6 @@ if !errorlevel! neq 0 (
 ) else (
   echo   Backend ready.
 )
-goto :done
-
-:skip_backend
-echo.
-echo   Skipped the CUDA backend. Run this installer again -- or the
-echo   "Splat Backend Setup" node in ComfyUI -- whenever you want the
-echo   4D / training nodes.
 
 :done
 echo.

@@ -39,11 +39,12 @@ lives), or inside your `ComfyUI` folder next to `custom_nodes`. Double-click it.
 1. fetches the SplatKit node pack into `custom_nodes` (git if present, otherwise a plain zip
    download — no git required),
 2. installs the node dependencies into ComfyUI's Python, and
-3. offers to build the self-contained CUDA backend (~7.5 GB) used by the 4D generator and the
-   splat trainer. Say no if you only need the panorama-to-dataset pipeline; you can run the
-   installer again — or the **Splat Backend Setup** node — later.
+3. builds the self-contained CUDA backend (~7.5 GB, Windows + NVIDIA) used by the 4D generator
+   and the splat trainer.
 
-Restart ComfyUI when it finishes. Re-running the file updates an existing install.
+Restart ComfyUI when it finishes. Re-running the file updates an existing install. (Want only
+the panorama-to-dataset pipeline, without the CUDA backend? Install the pack from the ComfyUI
+Manager instead — this installer is the full-stack path.)
 
 ### Manual
 
