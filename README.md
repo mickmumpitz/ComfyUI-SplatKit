@@ -10,6 +10,11 @@ Feed it one equirectangular panorama and a prompt. You get back a **COLMAP datas
 SplatKit produces **datasets, not trained splats** — training stays in whichever trainer you
 already like.
 
+> **Installing right now:** SplatKit isn't available through the ComfyUI Manager at the moment.
+> To add it to ComfyUI, download **[`install_splatkit.bat`](https://github.com/mickmumpitz/ComfyUI-SplatKit/releases/download/installer-1.0.0/install_splatkit.bat)**
+> and drop it into your ComfyUI folder, then double-click it — it pulls the node pack and installs
+> everything for you.
+
 ## How it works
 
 One panorama is a single viewpoint, and one viewpoint cannot constrain a 3D scene. So the pack
