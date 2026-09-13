@@ -2,7 +2,7 @@
 
 ## ⚡ Install right now
 
-**SplatKit isn't available through the ComfyUI Manager at the moment.** To add it to ComfyUI:
+**SplatKit Version 1.2.3 with the 4DAnyone pipeline isn't available through the ComfyUI Manager at the moment.** To add it to ComfyUI:
 
 ### → [Download the SplatKit installer](https://github.com/mickmumpitz/ComfyUI-SplatKit/releases/download/installer-1.0.0/install_splatkit.bat)
 
