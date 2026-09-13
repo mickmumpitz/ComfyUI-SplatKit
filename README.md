@@ -1,5 +1,16 @@
 # ComfyUI-SplatKit
 
+## ⚡ Install right now
+
+**SplatKit isn't available through the ComfyUI Manager at the moment.** To add it to ComfyUI:
+
+### → [Download the SplatKit installer](https://github.com/mickmumpitz/ComfyUI-SplatKit/releases/download/installer-1.0.0/install_splatkit.bat)
+
+Drop it into your ComfyUI folder and **double-click it**. It pulls the node pack and installs
+everything for you. That's it.
+
+---
+
 **Build 3D Gaussian Splat training datasets from a single 360° panorama — entirely inside
 ComfyUI.**
 
