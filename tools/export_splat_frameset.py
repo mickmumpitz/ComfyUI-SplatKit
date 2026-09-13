@@ -122,7 +122,6 @@ def main() -> int:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--backend-root", required=True, help="the 4DAnyone checkout")
     ap.add_argument("--model-dir", default="", help="model tree holding birefnet/ (default: <backend-root>/models)")
-    ap.add_argument("--foreground-model-dir", default="", help="selected local BiRefNet directory")
     ap.add_argument("--result-dir", required=True, help="a generation result directory")
     ap.add_argument("--out-root", required=True, help="where to write the frameset")
     ap.add_argument("--frames", default="0:120")
@@ -140,6 +139,7 @@ def main() -> int:
     sys.path.insert(0, str(backend))
 
     from fdanyone.assets import resolve_foreground_model
+    from fdanyone.download import ensure_foreground_model
     from fdanyone.foreground import load_foreground_model, predict_foreground_masks
     from fdanyone.io import write_json
     from fdanyone.nerfstudio.exporter import (NERFSTUDIO_MASK_THRESHOLD, _camera_records,
@@ -162,8 +162,8 @@ def main() -> int:
     transforms = _transforms(cams)
     videos = _dense_video_paths(result, cams)
     model_dir = Path(a.model_dir).resolve() if a.model_dir else backend / "models"
-    fg_model = load_foreground_model(
-        resolve_foreground_model(str(model_dir), path=a.foreground_model_dir or None), a.device)
+    ensure_foreground_model(str(model_dir))
+    fg_model = load_foreground_model(resolve_foreground_model(str(model_dir)), a.device)
     wanted = set(frames)
 
     # phase 1: several CPU workers decode camera clips in parallel into a bounded queue while

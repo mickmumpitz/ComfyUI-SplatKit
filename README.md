@@ -30,14 +30,33 @@ panorama ─▶ MoGe depth ─▶ camera-motion control video ─▶ WAN fills t
 
 ## Install
 
+### One-click (Windows) — recommended
+
+Download **[`install_splatkit.bat`](install_splatkit.bat)** and drop it into your ComfyUI folder
+— the portable folder that contains `python_embeded` and `ComfyUI` (where `run_nvidia_gpu.bat`
+lives), or inside your `ComfyUI` folder next to `custom_nodes`. Double-click it. It:
+
+1. fetches the SplatKit node pack into `custom_nodes` (git if present, otherwise a plain zip
+   download — no git required),
+2. installs the node dependencies into ComfyUI's Python, and
+3. offers to build the self-contained CUDA backend (~7.5 GB) used by the 4D generator and the
+   splat trainer. Say no if you only need the panorama-to-dataset pipeline; you can run the
+   installer again — or the **Splat Backend Setup** node — later.
+
+Restart ComfyUI when it finishes. Re-running the file updates an existing install.
+
+### Manual
+
 ```
 cd ComfyUI/custom_nodes
 git clone https://github.com/mickmumpitz/ComfyUI-SplatKit
 python_embeded\python.exe -m pip install -r ComfyUI-SplatKit/requirements.txt
 ```
 
-(Non-portable install: `python -m pip install -r ComfyUI-SplatKit/requirements.txt`.) Restart
-ComfyUI. Three things download on first use:
+(Non-portable install: `python -m pip install -r ComfyUI-SplatKit/requirements.txt`.) For the 4D
+and training nodes, build the backend once with
+`python_embeded\python.exe ComfyUI-SplatKit/tools/install_splat_backend.py` (or the **Splat
+Backend Setup** node). Restart ComfyUI. Three things download on first use:
 
 - the **MoGe** checkpoint → `ComfyUI/models/MoGe`
 - the **SphereSfM** binary (`colmap_sphere`, SHA-256 verified) → `bin/`. A CUDA build of
@@ -72,7 +91,9 @@ visibly degrades what WAN paints into the holes.
 
 Dataset nodes live under **SplatKit**. Six generator-specific nodes live under
 **SplatKit/4DAnyone**, and nine shared training/sequence nodes under **SplatKit/Splatting**; see [the 4D guide](docs/4DANYONE.md).
-Install the backend, install the [required models](docs/4DANYONE.md#manual-model-installation), and select them in the model loaders. The 4D nodes do not download model weights automatically.
+Build the backend once (the one-click installer above, or the **Splat Backend Setup** node). The
+4D nodes download their model weights automatically on first use; the optional **4DAnyone Model
+Loader** lets you point at weights you have already installed instead.
 
 - **Core** — `Dataset Project`, `MoGe Model Loader`, `Camera Plot Fly-Through (Geometry)`,
   `Camera Plot Scene Reference`, `Wan I2V Masked-Video Conditioning`.

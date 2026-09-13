@@ -24,6 +24,16 @@ import numpy as np
 
 from ..splatting.constants import LOG
 
+# The published weights, most preferred first. bf16 is the file every measurement used.
+WEIGHT_PREFERENCE = ("sam_3d_body_dinov3_bf16.safetensors",
+                     "sam_3d_body_dinov3_int8_convrot.safetensors")
+WEIGHT_MARKER = "sam_3d_body"
+WEIGHT_URL = ("https://huggingface.co/Comfy-Org/sam-3d-body/resolve/main/detection/"
+              "sam_3d_body_dinov3_bf16.safetensors")
+WEIGHT_SIZE_GB = 2.83
+# The published file's SHA-256 (Hugging Face's X-Linked-ETag for it); verified after download.
+WEIGHT_SHA256 = "59fa45200c504c5b56625004d7d3385daf48c616613e88099e43bf83b3e249cf"
+
 # The npz contract the backend validates. Keep in step with fdanyone.pipeline.SAM3D_KEYS.
 NPZ_KEYS = ("keypoints_incam", "vertices", "cam_t", "keypoints_2d", "intrinsics", "image_size")
 
@@ -34,6 +44,49 @@ def core_has_sam3d() -> bool:
         return True
     except Exception:
         return False
+
+
+def _weight_choices() -> list[str]:
+    import folder_paths
+    names = folder_paths.get_filename_list("detection")
+    ranked = [name for name in WEIGHT_PREFERENCE if name in names]
+    ranked += sorted(n for n in names if WEIGHT_MARKER in n.lower() and n not in ranked)
+    return ranked
+
+
+def ensure_weights() -> str:
+    """The weight file name to load, downloading the bf16 file if none is installed."""
+    from .download import download, free_space_gb
+    from .paths import sam3d_weights_dir
+
+    choices = _weight_choices()
+    if choices:
+        return choices[0]
+    dest = sam3d_weights_dir() / WEIGHT_PREFERENCE[0]
+    if free_space_gb(dest.parent) < WEIGHT_SIZE_GB + 1:
+        raise RuntimeError(f"Not enough free space for SAM 3D Body ({WEIGHT_SIZE_GB} GB) in "
+                           f"{dest.parent}.")
+    print(f"{LOG} downloading SAM 3D Body ({WEIGHT_SIZE_GB} GB, once) -> {dest}", flush=True)
+    try:
+        from comfy.utils import ProgressBar
+        bar = ProgressBar(100)
+
+        def progress(done, total):
+            if total:
+                bar.update_absolute(int(100 * done / total), 100)
+    except Exception:
+        progress = None
+    from tqdm import tqdm
+    with tqdm(desc="SAM 3D Body download", unit="B", unit_scale=True,
+              mininterval=1, disable=False) as terminal:
+        def report(done, total):
+            terminal.total = total or None
+            terminal.update(max(0, done - terminal.n))
+            if progress is not None:
+                progress(done, total)
+
+        download(WEIGHT_URL, dest, progress=report, sha256=WEIGHT_SHA256)
+    return dest.name
 
 
 def host_support() -> tuple[bool, str]:
@@ -61,13 +114,12 @@ def _load_model(model_file: str):
     import comfy.model_patcher
     import comfy.ops
     import comfy.utils
+    import folder_paths
     import torch
     from comfy.ldm.sam3d_body.model.model import SAM3DBody
 
-    path = Path(model_file)
-    if not path.is_file():
-        raise FileNotFoundError(f"SAM 3D Body weights not found: {path}")
-    sd = comfy.utils.load_torch_file(str(path), safe_load=True)
+    path = folder_paths.get_full_path_or_raise("detection", model_file)
+    sd = comfy.utils.load_torch_file(path, safe_load=True)
     sd = {k.replace(".layers.0.0.", ".layers.0."): v for k, v in sd.items()}
 
     load_device = comfy.model_management.get_torch_device()
@@ -104,13 +156,13 @@ def _default_intrinsics(height: int, width: int) -> np.ndarray:
                      [0.0, 0.0, 1.0]], dtype=np.float64)
 
 
-def estimate_pose(video: Path, out_npz: Path, *, model_path: Path, fov: float = 0.0, batch_size: int = 16,
+def estimate_pose(video: Path, out_npz: Path, *, fov: float = 0.0, batch_size: int = 16,
                   hands: bool = True) -> dict:
     """Run SAM 3D Body over the canonical clip and write the backend's pose npz."""
     import torch
     from comfy_extras.nodes_sam3d_body import SAM3DBody_Predict
 
-    model_file = str(model_path)
+    model_file = ensure_weights()
     frames = _read_frames(Path(video))
     count, height, width, _ = frames.shape
     print(f"{LOG} body pose in ComfyUI: {count} frames at {width}x{height} using {model_file}",

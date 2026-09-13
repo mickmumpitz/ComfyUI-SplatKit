@@ -25,6 +25,7 @@ from fdanyone.assets import (
 )
 from fdanyone.config import BASE24, INFERENCE, RANK64_DELTA4
 from fdanyone.device import CUDA_ALLOCATOR_CONF, select_cuda_devices
+from fdanyone.download import ensure_example_video, ensure_models
 from fdanyone.errors import ConfigurationError
 from fdanyone.io import AtomicResultDirectory, remove_tree, write_json
 from fdanyone.motion.result import MotionResult
@@ -272,8 +273,7 @@ def prepare_clip_only(
                     "num_frames": int(cached["num_frames"]), "reused": True}
 
     validate_required_video_codecs()
-    if not Path(video_path).is_file():
-        raise ConfigurationError(f"Input video does not exist: {video_path}")
+    ensure_example_video(video_path)
     clip = decode_canonical_clip(
         video_path,
         num_frames=INFERENCE.num_frames,
@@ -310,10 +310,6 @@ def run_pipeline(
     run_label: str = "",
     sam3d_npz: str | None = None,
     pad_short: bool = False,
-    vae_path: str | None = None,
-    prompt_context_path: str | None = None,
-    foreground_model_dir: str | None = None,
-    turbo_lora_path: str | None = None,
 ) -> dict:
     """Execute inference and publish reusable pose plus 4DAnyone results."""
 
@@ -346,14 +342,14 @@ def run_pipeline(
     devices = select_cuda_devices(gpu_ids)
     device = devices[0]
 
-    if not Path(video_path).is_file():
-        raise ConfigurationError(f"Input video does not exist: {video_path}")
-    checkpoint = resolve_checkpoint(checkpoint_path, model_dir=model_dir)
-    base_assets = resolve_base_assets(model_dir, vae_path=vae_path, prompt_context_path=prompt_context_path)
-    turbo_lora = resolve_turbo_lora(model_dir, path=turbo_lora_path) if enable_turbo else None
+    ensure_example_video(video_path)
+    # No licensed body model to resolve any more: SAM 3D Body and MHR replaced GVHMR and
+    # SMPL-X, so there is nothing here that a user has to register for and download by hand.
+    ensure_models(model_dir, enable_turbo=enable_turbo, checkpoint_path=checkpoint_path)
+    turbo_lora = resolve_turbo_lora(model_dir) if enable_turbo else None
     worker_python = os.path.abspath(sys.executable)
 
-    foreground_model = resolve_foreground_model(model_dir, path=foreground_model_dir)
+    foreground_model = resolve_foreground_model(model_dir)
     canonical_fps = None if str(target_fps).lower() == "auto" else target_fps
     clip = decode_canonical_clip(
         video_path,
@@ -386,6 +382,8 @@ def run_pipeline(
 
         motion = motion_from_sam(_np.load(sam_keypoints), len(clip.frames))
 
+        checkpoint = resolve_checkpoint(checkpoint_path, model_dir=model_dir)
+        base_assets = resolve_base_assets(model_dir)
         # Record the published identity only for the published checkpoint; an
         # explicit override must not claim the frozen Hugging Face coordinates.
         if checkpoint_path is None:

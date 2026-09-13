@@ -9,7 +9,7 @@ from ...core.splatting.constants import LOG, NODE_PREFIX, PACK_ROOT, TYPE_FRAMES
 from ...core.four_d_anyone.constants import CATEGORY, TYPE_VIEWS
 from ...core.splatting.backend import BackendError, load_config
 from ...core.splatting.paths import framesets_root
-from ...core.four_d_anyone.paths import BIREFNET_FILES
+from ...core.four_d_anyone.paths import models_root
 from ...core.splatting.runner import PhaseProgress, run
 from ...core.splatting.sequence import read_frameset
 
@@ -52,12 +52,7 @@ class FourDAnyoneExportFrameset:
         if last < first:
             raise BackendError(f"last_frame ({last}) is before first_frame ({first})")
         out_root = framesets_root() / result.name
-        foreground = views.get("foreground_model_dir")
-        if not foreground:
-            raise BackendError("Run Generate Views with 4DAnyone Model Loader to select BiRefNet before exporting.")
-        for name in BIREFNET_FILES:
-            if not (Path(foreground) / name).is_file():
-                raise BackendError(f"Missing BiRefNet file: {Path(foreground) / name}")
+        model_dir = views.get("run", {}).get("model_dir") or str(models_root())
         cameras = len(views.get("dense", [])) or 1
         wanted = last - first + 1
         progress = PhaseProgress([(re.compile(r"^camera \d+: .*masked"), cameras),
@@ -87,7 +82,7 @@ class FourDAnyoneExportFrameset:
             pass
         command = [config["python"], str(EXPORT_SCRIPT),
                    "--backend-root", config["backend_root"],
-                   "--foreground-model-dir", foreground,
+                   "--model-dir", model_dir,
                    "--result-dir", str(result),
                    "--out-root", str(out_root),
                    "--frames", f"{first}:{last}",

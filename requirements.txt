@@ -8,10 +8,9 @@
 # The video/pose/player adapters also use av, aiohttp, safetensors and torchvision,
 # provided by ComfyUI (0.34 or newer for these optional nodes).
 # Gaussian training and 4DAnyone run in a separate managed Python environment.
-# The standalone installer bundle (installer.bat, on the GitHub Releases page) installs
-# tools/splatting/requirements.txt plus vendored/4danyone/requirements.txt there, using the
-# verified gsplat wheel. Do not add that environment's torch/CUDA/gsplat pins to these host
-# requirements.
+# tools/install_splat_backend.py installs tools/splatting/requirements.txt plus
+# vendored/4danyone/requirements.txt there, using the verified gsplat wheel.
+# Do not add that environment's torch/CUDA/gsplat pins to these host requirements.
 
 opencv-python      # cv2 -- panorama/perspective resampling, EXR I/O
 trimesh            # mesh build for the depth->mesh render

@@ -4,7 +4,7 @@ Ported from 4DAnyone's `fdanyone/nerfstudio/perceptual.py` (Apache-2.0), with th
 fdanyone error types replaced. This is NOT LPIPS: it is an L1 pixel term plus five L1
 feature terms read off a MatConvNet VGG-19, each divided by a fixed constant.
 
-The weights are not redistributed with this package. Install them manually from
+The weights are not redistributed with this package. `weights.py` downloads them from
 the upstream 4DAnyone model repository on first use.
 """
 

@@ -92,10 +92,10 @@ def resolve_checkpoint(path: str | Path | None = None, model_dir: str | Path = "
     return _require_file(Path(model_dir) / "4danyone" / CHECKPOINT, "Checkpoint", "scripts/download_model.py")
 
 
-def resolve_turbo_lora(model_dir: str | Path = "models", *, path: str | Path | None = None) -> Path:
+def resolve_turbo_lora(model_dir: str | Path = "models") -> Path:
     """Resolve and authenticate the exact Wan2.2 5B Turbo LoRA."""
 
-    resolved = _require_file(Path(path) if path else Path(model_dir) / "4danyone" / TURBO_LORA, "Turbo LoRA", "scripts/download_model.py")
+    resolved = _require_file(Path(model_dir) / "4danyone" / TURBO_LORA, "Turbo LoRA", "scripts/download_model.py")
     size = resolved.stat().st_size
     if size != TURBO_LORA_SIZE_BYTES:
         raise AssetError(f"Turbo LoRA size mismatch: {size} != {TURBO_LORA_SIZE_BYTES} bytes ({resolved})")
@@ -107,8 +107,8 @@ def resolve_turbo_lora(model_dir: str | Path = "models", *, path: str | Path | N
 
 
 
-def resolve_foreground_model(model_dir: str | Path = "models", *, path: str | Path | None = None) -> Path:
-    root = Path(path).expanduser() if path else Path(model_dir).expanduser() / BIREFNET_DIR
+def resolve_foreground_model(model_dir: str | Path = "models") -> Path:
+    root = Path(model_dir).expanduser() / BIREFNET_DIR
     for relative in BIREFNET_FILES:
         _require_file(root / relative, "BiRefNet file", "scripts/download_model.py")
     return root.resolve()
@@ -124,12 +124,11 @@ def resolve_perceptual_vgg19(model_dir: str | Path = "models") -> Path:
     )
 
 
-def resolve_base_assets(model_dir: str | Path = "models", *, vae_path: str | Path | None = None,
-                        prompt_context_path: str | Path | None = None) -> BaseAssets:
+def resolve_base_assets(model_dir: str | Path = "models") -> BaseAssets:
     """Resolve the local VAE and frozen prompt conditioning."""
 
     root = Path(model_dir).expanduser() / "4danyone"
     return BaseAssets(
-        vae=_require_file(Path(vae_path) if vae_path else root / WAN_VAE, "VAE", "scripts/download_model.py"),
-        prompt_context=_require_file(Path(prompt_context_path) if prompt_context_path else root / PROMPT_CONTEXT, "Prompt conditioning", "scripts/download_model.py"),
+        vae=_require_file(root / WAN_VAE, "VAE", "scripts/download_model.py"),
+        prompt_context=_require_file(root / PROMPT_CONTEXT, "Prompt conditioning", "scripts/download_model.py"),
     )

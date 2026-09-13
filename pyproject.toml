@@ -1,6 +1,6 @@
 [project]
 name = "comfyui-splatkit"
-version = "1.2.2"
+version = "1.2.3"
 description = "Build COLMAP datasets from a 360 panorama; video-to-4D Gaussian splat training"
 license = { file = "LICENSE" }
 requires-python = ">=3.10"
