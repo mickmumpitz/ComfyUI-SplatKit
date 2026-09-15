@@ -9,7 +9,7 @@ from pathlib import Path
 
 from ...core.splatting.constants import CATEGORY, LOG, NODE_PREFIX, PACK_ROOT, TYPE_FRAMESET, TYPE_SEQUENCE
 from ...core.splatting.backend import BackendError, load_config
-from ...core.splatting.paths import training_models_root, sequence_dir, output_root, _safe_name
+from ...core.splatting.paths import training_models_root, sequence_dir, output_root, _safe_name, perceptual_options, resolve_perceptual
 from ...core.splatting.cache import write_json
 from ...core.splatting.runner import FrameProgress, run
 from ...core.splatting import runtime
@@ -18,6 +18,7 @@ from ...core.splatting.sequence import ensure_player_files, load_images, read_se
 
 QUALITY = ["draft", "standard", "best"]
 PERCEPTUAL = "perceptual/imagenet-vgg-verydeep-19-conv.safetensors"
+TYPE_PERCEPTUAL = "SPLATKIT_PERCEPTUAL_MODEL"
 _FRAME_LINE = re.compile(r"^\s*frame\s+(\d+)\s+(cold|warm)\s+\d+\s+it\b", re.IGNORECASE)
 
 
@@ -39,6 +40,32 @@ def _finished_sequence(name, signature):
                and (folder / "preview" / f"frame_{i:05d}.png").is_file() for i in ids):
             return folder
     return None
+
+
+class SplatKitPerceptualModelLoader:
+    """Backwards compatibility only: kept so older workflows that wired a
+    Splat Perceptual Model Loader into Train Sequence still load. Current
+    Train Sequence resolves the VGG-19 weights itself and ignores this output."""
+
+    CATEGORY = CATEGORY
+    FUNCTION = "load"
+    RETURN_TYPES = (TYPE_PERCEPTUAL,)
+    RETURN_NAMES = ("perceptual_model",)
+    DESCRIPTION = "Select local VGG-19 training weights from models/splatkit/perceptual. No automatic downloads."
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {"model_name": (perceptual_options(),)}}
+
+    @classmethod
+    def IS_CHANGED(cls, **kwargs):
+        return float("nan")
+
+    def load(self, model_name):
+        try:
+            return (str(resolve_perceptual(model_name)),)
+        except FileNotFoundError as exc:
+            raise BackendError(str(exc)) from exc
 
 
 class SplatKitTrain:
@@ -282,6 +309,7 @@ class SplatKitInfo:
 
 
 NODE_CLASS_MAPPINGS = {
+    NODE_PREFIX + "PerceptualModelLoader": SplatKitPerceptualModelLoader,
     NODE_PREFIX + "TrainSequence": SplatKitTrain,
     NODE_PREFIX + "LoadSequence": SplatKitLoadSequence,
     NODE_PREFIX + "SequenceFrame": SplatKitGetFrame,
@@ -289,6 +317,7 @@ NODE_CLASS_MAPPINGS = {
     NODE_PREFIX + "SequenceInfo": SplatKitInfo,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
+    NODE_PREFIX + "PerceptualModelLoader": "Splat Perceptual Model Loader",
     NODE_PREFIX + "TrainSequence": "Train Sequence",
     NODE_PREFIX + "LoadSequence": "Load Sequence",
     NODE_PREFIX + "SequenceFrame": "Sequence Frame",
