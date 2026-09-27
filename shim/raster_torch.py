@@ -151,6 +151,8 @@ def _raster_triangles(tpos, tob, tfid, H, W, face_chunk):
     tpos : [M,3,4] clip-space verts;  tob : [M,3,3] original barycentric basis;
     tfid : [M] original face id (0-based).
     """
+    if _SPANS:
+        return _raster_triangles_spans(tpos, tob, tfid, H, W, face_chunk)
     device = tpos.device
     HW = H * W
     M = tpos.shape[0]
@@ -293,6 +295,195 @@ def _raster_triangles(tpos, tob, tfid, H, W, face_chunk):
     rast[cov, 2] = best_z[cov]
     rast[:, 3] = best_f.float()
     return rast.view(H, W, 4)
+
+
+# ---- scanline-span candidate enumeration --------------------------------------------------------
+# The bounding-box enumeration above tests every pixel of each triangle's screen box. A panorama
+# depth mesh is full of long diagonal "rubber-sheet" slivers across depth jumps (a bench edge, a
+# roofline against the sky): a few hundred covered pixels but a box spanning half the view. On the
+# real Piazza Bologni test pano that was ~3.9e11 candidates for ONE 512x512 cube face (~48,000
+# chunks), i.e. hours per fly-through on GPUs without the Triton path (AMD/ROCm, Apple, CPU).
+# Here each triangle is walked row by row and only the pixels between its edges on that row are
+# candidates (widened by _SPAN_PAD px so the barycentric _EPS tolerance can never lose a pixel).
+# The inside test, depth test and outputs are the bbox path's, unchanged - only the candidate set
+# shrinks. Disable with P2S_RASTER_SPANS=0.
+_SPANS = os.environ.get("P2S_RASTER_SPANS", "1") != "0"
+_SPAN_PAD = 2
+_ROW_BUDGET = int(os.environ.get("P2S_RASTER_ROW_BUDGET", "4000000"))
+
+
+def _row_spans(sxv, ti, py):
+    """Tight [lo, hi] x-extent of triangle ti on pixel row py's centre line (float, unclamped).
+
+    Intersects y = py + 0.5 with the triangle's three edges. Rows whose centre line misses
+    the triangle come back with lo > hi (empty)."""
+    yc = py.to(sxv.dtype) + 0.5
+    lo = torch.full_like(yc, float("inf"))
+    hi = torch.full_like(yc, float("-inf"))
+    for a, b in ((0, 1), (1, 2), (2, 0)):
+        ax, ay = sxv[ti, a, 0], sxv[ti, a, 1]
+        bx, by = sxv[ti, b, 0], sxv[ti, b, 1]
+        dy = by - ay
+        crosses = ((ay - yc) * (by - yc) <= 0) & (dy != 0)
+        t = torch.where(crosses, (yc - ay) / torch.where(dy != 0, dy, torch.ones_like(dy)), torch.zeros_like(dy))
+        x = ax + t * (bx - ax)
+        lo = torch.where(crosses, torch.minimum(lo, x), lo)
+        hi = torch.where(crosses, torch.maximum(hi, x), hi)
+        # an edge lying exactly on the centre line contributes both endpoints
+        flat = (dy == 0) & (ay == yc)
+        lo = torch.where(flat, torch.minimum(lo, torch.minimum(ax, bx)), lo)
+        hi = torch.where(flat, torch.maximum(hi, torch.maximum(ax, bx)), hi)
+    return lo, hi
+
+
+def _raster_triangles_spans(tpos, tob, tfid, H, W, face_chunk):
+    device = tpos.device
+    HW = H * W
+    M = tpos.shape[0]
+
+    w = tpos[:, :, 3]
+    ndc = tpos[:, :, :3] / w[:, :, None]
+    sxv = torch.stack([(ndc[:, :, 0] * 0.5 + 0.5) * W,
+                       (ndc[:, :, 1] * 0.5 + 0.5) * H], dim=-1)        # [M,3,2]
+    vz = ndc[:, :, 2]
+    iw = 1.0 / w
+
+    best_invw = torch.full((HW,), -_FAR, device=device)
+    best_z = torch.zeros((HW,), device=device)
+    best_u = torch.zeros((HW,), device=device)
+    best_v = torch.zeros((HW,), device=device)
+    best_f = torch.zeros((HW,), dtype=torch.long, device=device)
+
+    p0a, p1a, p2a = sxv[:, 0], sxv[:, 1], sxv[:, 2]
+    area2_all = (p1a[:, 0] - p0a[:, 0]) * (p2a[:, 1] - p0a[:, 1]) \
+        - (p1a[:, 1] - p0a[:, 1]) * (p2a[:, 0] - p0a[:, 0])
+    xmin = torch.floor(torch.minimum(torch.minimum(p0a[:, 0], p1a[:, 0]), p2a[:, 0])).long()
+    xmax = torch.ceil(torch.maximum(torch.maximum(p0a[:, 0], p1a[:, 0]), p2a[:, 0])).long()
+    ymin = torch.floor(torch.minimum(torch.minimum(p0a[:, 1], p1a[:, 1]), p2a[:, 1])).long()
+    ymax = torch.ceil(torch.maximum(torch.maximum(p0a[:, 1], p1a[:, 1]), p2a[:, 1])).long()
+    ok = (area2_all.abs() > _EPS) & (xmax >= 0) & (xmin <= W - 1) & (ymax >= 0) & (ymin <= H - 1)
+    y0a = torch.where(ok, ymin.clamp(0, H - 1), torch.ones_like(ymin))
+    y1a = torch.where(ok, ymax.clamp(0, H - 1), torch.zeros_like(ymax))
+    rows_all = (y1a - y0a + 1).clamp(min=0)
+
+    empty = torch.zeros((HW, 4), device=device).view(H, W, 4)
+    if M == 0:
+        return empty
+    csum = torch.cumsum(rows_all, 0)
+    total_rows = int(csum[-1].item())
+    if total_rows == 0:
+        return empty
+    # chunk triangles by row count (a row is a handful of scalars), and by face_chunk
+    rb = max(_ROW_BUDGET, 1)
+    cut = torch.searchsorted(csum, torch.arange(1, total_rows // rb + 2, device=device) * rb).clamp(max=M).tolist()
+    bounds, prev = [], 0
+    for x in cut + [M]:
+        while x - prev > face_chunk:
+            prev += face_chunk
+            bounds.append(prev)
+        if x > prev:
+            bounds.append(x)
+            prev = x
+
+    budget = max(int(_FRAG_BUDGET), HW)
+    start = 0
+    for stop in bounds:
+        rows = rows_all[start:stop]
+        nrows = int(rows.sum().item())
+        base = start
+        start = stop
+        if nrows == 0:
+            continue
+        off = torch.cumsum(rows, 0) - rows
+        k = torch.arange(nrows, device=device)
+        rl = torch.searchsorted(off, k, right=True) - 1
+        rti = rl + base                                               # global triangle id per row
+        rpy = y0a[rti] + (k - off[rl])
+
+        lo, hi = _row_spans(sxv, rti, rpy)
+        valid = lo <= hi
+        lo = torch.where(valid, lo, torch.zeros_like(lo)).clamp(-2.0 * W, 3.0 * W)
+        hi = torch.where(valid, hi, torch.zeros_like(hi)).clamp(-2.0 * W, 3.0 * W)
+        xs = (torch.floor(lo - 0.5).long() - _SPAN_PAD).clamp(0, W - 1)
+        xe = (torch.ceil(hi - 0.5).long() + _SPAN_PAD).clamp(0, W - 1)
+        wr = torch.where(valid & (hi >= -_SPAN_PAD) & (lo <= W + _SPAN_PAD),
+                         (xe - xs + 1).clamp(min=0), torch.zeros_like(xs))
+        keep = wr > 0
+        if not bool(keep.any()):
+            continue
+        rti, rpy, xs, wr = rti[keep], rpy[keep], xs[keep], wr[keep]
+
+        # sub-chunk rows by fragment budget
+        fcs = torch.cumsum(wr, 0)
+        nfr = int(fcs[-1].item())
+        cuts = [len(wr)] if nfr <= budget else \
+            torch.searchsorted(fcs, torch.arange(1, nfr // budget + 2, device=device) * budget,
+                               right=True).clamp(min=1, max=len(wr)).tolist() + [len(wr)]
+        r0 = 0
+        for r1 in cuts:
+            if r1 <= r0:
+                continue
+            sw = wr[r0:r1]
+            tot = int(sw.sum().item())
+            so = torch.cumsum(sw, 0) - sw
+            kk = torch.arange(tot, device=device)
+            ri = torch.searchsorted(so, kk, right=True) - 1
+            ti = rti[r0:r1][ri]
+            px = xs[r0:r1][ri] + (kk - so[ri])
+            py = rpy[r0:r1][ri]
+            r0 = r1
+            _shade(ti, px, py, sxv, vz, iw, tob, tfid, area2_all, W,
+                   best_invw, best_z, best_u, best_v, best_f)
+
+    rast = torch.zeros((HW, 4), device=device)
+    cov = best_f > 0
+    rast[cov, 0] = best_u[cov]
+    rast[cov, 1] = best_v[cov]
+    rast[cov, 2] = best_z[cov]
+    rast[:, 3] = best_f.float()
+    return rast.view(H, W, 4)
+
+
+def _shade(ti, px, py, sxv, vz, iw, tob, tfid, area2_all, W,
+           best_invw, best_z, best_u, best_v, best_f):
+    """The bbox path's per-fragment inside test + nearest-wins update, on global triangle ids."""
+    sx = px.float() + 0.5
+    sy = py.float() + 0.5
+    inv = 1.0 / area2_all[ti]
+    g0, g1, g2 = sxv[ti, 0], sxv[ti, 1], sxv[ti, 2]
+    b0 = ((g1[:, 0] - sx) * (g2[:, 1] - sy) - (g1[:, 1] - sy) * (g2[:, 0] - sx)) * inv
+    b1 = ((g2[:, 0] - sx) * (g0[:, 1] - sy) - (g2[:, 1] - sy) * (g0[:, 0] - sx)) * inv
+    b2 = 1.0 - b0 - b1
+    inside = (b0 >= -_EPS) & (b1 >= -_EPS) & (b2 >= -_EPS)
+    if not bool(inside.any()):
+        return
+    ti, px, py = ti[inside], px[inside], py[inside]
+    b0, b1, b2 = b0[inside], b1[inside], b2[inside]
+    pw0 = b0 * iw[ti, 0]
+    pw1 = b1 * iw[ti, 1]
+    pw2 = b2 * iw[ti, 2]
+    invw = pw0 + pw1 + pw2
+    obf = tob[ti]
+    ob_pix = (pw0[:, None] * obf[:, 0] + pw1[:, None] * obf[:, 1]
+              + pw2[:, None] * obf[:, 2]) / invw[:, None]
+    zf = b0 * vz[ti, 0] + b1 * vz[ti, 1] + b2 * vz[ti, 2]
+    pix = py * W + px
+    o1 = torch.argsort(invw, descending=True, stable=True)
+    o2 = torch.argsort(pix[o1], stable=True)
+    order = o1[o2]
+    pix_s = pix[order]
+    first = torch.ones_like(pix_s, dtype=torch.bool)
+    first[1:] = pix_s[1:] != pix_s[:-1]
+    wp = pix_s[first]
+    sel = order[first]
+    take = invw[sel] > best_invw[wp]
+    wp = wp[take]
+    sel = sel[take]
+    best_invw[wp] = invw[sel]
+    best_z[wp] = zf[sel]
+    best_u[wp] = ob_pix[sel, 1]
+    best_v[wp] = ob_pix[sel, 2]
+    best_f[wp] = tfid[ti[sel]] + 1
 
 
 @torch.no_grad()

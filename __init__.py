@@ -5,6 +5,14 @@
 import os
 os.environ.setdefault("OPENCV_IO_ENABLE_OPENEXR", "1")
 
+# Install the ROCm tall-skinny matmul guard before any node module runs point-cloud
+# math (shim/rocm_matmul_guard.py). A no-op on CUDA/CPU builds.
+try:
+    from .shim import rocm_matmul_guard as _rmg
+    _rmg.install()
+except Exception as _e:
+    print(f"[SplatKit] ROCm matmul guard not installed: {_e}")
+
 # All node classes live in nodes/; that package merges its submodules' mappings and
 # survives a partial import failure on its own (see nodes/__init__.py).
 try:

@@ -441,13 +441,20 @@ def _gpu_sift_available():
     if os.environ.get("COLMAP_SPHERE_FORCE_CPU"):
         _USE_GPU_SIFT = False
     elif _IS_WIN:
-        _USE_GPU_SIFT = True                 # unchanged behavior for the existing bundle
+        the bundle is a CUDA build, so it needs an NVIDIA card. On an AMD
+        # card it dies with "CUDA error at ...cuda.cc:59" instead of falling back - and a ROCm torch
+        # reports torch.cuda.is_available() == True, so check torch.version.hip too (same below).
+        try:
+            import torch
+            _USE_GPU_SIFT = bool(torch.cuda.is_available()) and not getattr(torch.version, "hip", None)
+        except Exception:                    # noqa: BLE001 -- no torch? keep the old default
+            _USE_GPU_SIFT = True
     elif sys.platform == "darwin":
         _USE_GPU_SIFT = False                # no CUDA on macOS, ever
     else:
         try:
             import torch
-            _USE_GPU_SIFT = bool(torch.cuda.is_available())
+            _USE_GPU_SIFT = bool(torch.cuda.is_available()) and not getattr(torch.version, "hip", None)
         except Exception:                    # noqa: BLE001 -- no torch? keep the default
             _USE_GPU_SIFT = True
     if not _USE_GPU_SIFT:

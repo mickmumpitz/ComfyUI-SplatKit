@@ -14,6 +14,9 @@ See ``nvdiffrast_shim`` for the drop-in ``nvdiffrast.torch`` API and
 ``raster_torch`` for the pure-PyTorch backend.
 """
 
+from . import rocm_matmul_guard
+rocm_matmul_guard.install()  # ROCm tall-skinny GEMM bug, see that module
+
 from . import raster_torch, nvdiffrast_shim
 from .nvdiffrast_shim import install, backend
 
