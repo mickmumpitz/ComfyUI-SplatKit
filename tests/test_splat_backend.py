@@ -389,16 +389,17 @@ runpy.run_path(sys.argv[1], run_name='__main__')
     def test_clean_cache_is_best_effort_and_targets_the_uv_cache(self):
         tools = self.root / "cache"
         tools.mkdir()
-        # No uv.exe yet: nothing to run, and no crash.
+        uv_exe = "uv.exe" if os.name == "nt" else "uv"
+        # No uv binary yet: nothing to run, and no crash.
         with patch.object(setup.runtime, "TOOLS", tools), patch.object(setup, "run") as run:
             setup.clean_cache()
             run.assert_not_called()
         # With uv present, it delegates to `uv cache clean` and swallows failures.
-        (tools / "uv.exe").write_text("stub")
+        (tools / uv_exe).write_text("stub")
         with patch.object(setup.runtime, "TOOLS", tools), \
              patch.object(setup, "run", side_effect=subprocess.CalledProcessError(1, "uv")) as run:
             setup.clean_cache()  # must not raise
-            self.assertEqual(list(run.call_args.args[0]), [tools / "uv.exe", "cache", "clean"])
+            self.assertEqual(list(run.call_args.args[0]), [tools / uv_exe, "cache", "clean"])
 
     def test_keep_cache_skips_cleanup_on_refresh(self):
         target = self.root / "splat_backend"
@@ -444,7 +445,10 @@ runpy.run_path(sys.argv[1], run_name='__main__')
              patch.object(setup.runtime, "MANIFEST", manifest), \
              patch.object(setup.runtime, "VENV", target / "venv"), \
              patch.object(setup.runtime, "expected", return_value={}), \
+             patch.object(setup.runtime, "WHEEL_NAME", "gsplat-test.whl"), \
+             patch.object(setup.runtime, "WHEEL_SHA256", "0" * 64), \
              patch.object(setup, "download", return_value=self.root / "archive"), \
+             patch.object(setup, "fetch_uv", return_value=self.root / "uv"), \
              patch.object(setup, "extract"), patch.object(setup.shutil, "disk_usage", return_value=Space()), \
              patch.object(setup, "run", side_effect=RuntimeError("install failed")):
             with self.assertRaisesRegex(RuntimeError, "install failed"):

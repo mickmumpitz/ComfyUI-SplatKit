@@ -6,10 +6,14 @@ frame. The result is a sequence of splats, not a rigged character.
 
 ## Setup and first run
 
-Requires **Windows x64, an NVIDIA CUDA GPU and ComfyUI 0.34 or newer**.
-Generation has been reported to use about 24 GB VRAM; lower-memory cards have not
-been validated. Allow roughly 7.5 GB for the backend and 19 GB for models, plus
-space for outputs. Setup requires at least 20 GB free.
+Requires **Windows x64 or Linux x86_64, an NVIDIA CUDA GPU and ComfyUI 0.34 or
+newer**. Generation has been reported to use about 24 GB VRAM; lower-memory
+cards have not been validated. Allow roughly 7.5 GB for the backend and 19 GB
+for models, plus space for outputs. Setup requires at least 20 GB free.
+macOS is unsupported (no CUDA). On Linux, the backend wheel is a from-source build that
+does not have a permanent download URL yet -- see
+[docs/LINUX_BACKEND.md](LINUX_BACKEND.md) before running Splat Backend Setup
+for the first time.
 
 1. Restart ComfyUI after installing or updating SplatKit.
 2. Open [4d_backend_setup.json](../workflows/4danyone/4d_backend_setup.json), enable
@@ -61,7 +65,9 @@ and training use the isolated Python 3.11 / torch 2.8.0 / CUDA 12.8 / gsplat 1.4
 backend. Setup installs [trainer requirements](../tools/splatting/requirements.txt)
 and [generator requirements](../vendored/4danyone/requirements.txt) there. Do not
 install these into ComfyUI's Python; their pinned versions differ from the host.
-Both processes still share GPU memory. Linux and macOS backend setup are unsupported.
+Both processes still share GPU memory. Linux x86_64 backend setup is supported once
+the Linux gsplat wheel is hosted (see [docs/LINUX_BACKEND.md](LINUX_BACKEND.md));
+macOS backend setup is unsupported (no CUDA).
 
 ## Reuse and updates
 
